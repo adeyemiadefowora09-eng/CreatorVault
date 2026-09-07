@@ -15,7 +15,7 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 import { cn } from "@/lib/utils";
 import type { TrustScoreEvent, TrustScoreSummary } from "@/types/trust-score";
 
-const TIER_STYLES: Record
+const TIER_STYLES: Record<
   TrustScoreSummary["tier"],
   { label: string; badge: string; gauge: string }
 > = {
