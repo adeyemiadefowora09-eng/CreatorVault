@@ -1,4 +1,4 @@
-# CreatorVault 🛡️
+# CreatorVault 
 
 **A secure payment and deal-management platform for African creators.**
 
@@ -6,7 +6,7 @@ CreatorVault connects creators and brands through funded deals, AI-powered contr
 
 ---
 
-## 🏗️ Project Architecture
+##  Project Architecture
 
 This project is structured as a monorepo containing three main decoupled services:
 
@@ -18,7 +18,6 @@ This project is structured as a monorepo containing three main decoupled service
 
 ---
 
-## 🚀 Getting Started
 
 To run this project locally, you will need to boot up the three different services. Open three separate terminal windows:
 
@@ -46,15 +45,9 @@ npm run dev
 
 ---
 
-## 👥 Team Members
+##  Team Members
 
-*   **[Name]** — Frontend Lead
-*   **[Name]** — Backend Lead
-*   **[Name]** — AI & Architecture Lead (Ade)
-*   *(Add team members here)*
+*   **Adekoya Ayomide Toluwani** — Frontend Lead
+*   **Adefowora Adeyemi Omotoyosi** — Backend Lead
+*   **Asaolu Samuel Oluwaseyifunmi** — AI & Architecture Lead
 
-## 🏆 Hackathon Links
-
-*   **Live Demo URL:** [Insert Link Here]
-*   **Pitch Deck / Video:** [Insert Link Here]
-*   **Hackathon Page:** [Insert Link Here]
