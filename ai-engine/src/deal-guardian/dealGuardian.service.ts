@@ -1,51 +1,75 @@
-import dotenv from "dotenv";
-dotenv.config();
+/**
+ * dealGuardian.service.ts
+ * Calls OpenAI's gpt-4o to produce a contract risk analysis, validates the
+ * response against the strict schema, and retries once on malformed output.
+ */
 
-export async function analyzeContract(text: string) {
-  const prompt = `
-Analyze the following contract for a creator/brand deal.
-Return a JSON object with this exact structure:
-{
-  "riskLevel": "LOW" | "MEDIUM" | "HIGH" | "CRITICAL",
-  "riskScore": number between 0 and 100,
-  "summary": "Short summary of the contract risks",
-  "flaggedClauses": [
-    {
-      "clause": "The problematic text snippet",
-      "risk": "LOW" | "MEDIUM" | "HIGH" | "CRITICAL",
-      "category": "PAYMENT_TERMS" | "IP_RIGHTS" | "EXCLUSIVITY" | "TERMINATION" | "LIABILITY",
-      "explanation": "Why this is flagged",
-      "suggestion": "How to negotiate or fix it"
-    }
-  ],
-  "recommendations": ["Actionable recommendation 1", "Actionable recommendation 2"]
+import OpenAI from "openai";
+import { ContractAnalysis, parseContractAnalysis } from "./dealGuardian.schema";
+import { DEAL_GUARDIAN_SYSTEM_PROMPT, buildDealGuardianUserPrompt } from "./prompts";
+
+export interface DealGuardianServiceOptions {
+  /** Defaults to reading OPENAI_API_KEY from the environment if omitted. */
+  apiKey?: string;
+  model?: string;
+  /** Max attempts if the model returns invalid JSON / fails schema validation. Default 2. */
+  maxAttempts?: number;
 }
 
-Contract Text:
-${text}
-  `;
+export class DealGuardianService {
+  private readonly client: OpenAI;
+  private readonly model: string;
+  private readonly maxAttempts: number;
 
-  try {
-    const response = await fetch("https://api.openai.com/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
-      },
-      body: JSON.stringify({
-        model: "gpt-4o",
-        messages: [{ role: "user", content: prompt }],
-        response_format: { type: "json_object" },
-      }),
-    });
+  constructor(options: DealGuardianServiceOptions = {}) {
+    const apiKey = options.apiKey ?? process.env.OPENAI_API_KEY;
+    if (!apiKey) {
+      throw new Error("OPENAI_API_KEY is not set and no apiKey was provided to DealGuardianService");
+    }
+    this.client = new OpenAI({ apiKey });
+    this.model = options.model ?? "gpt-4o";
+    this.maxAttempts = options.maxAttempts ?? 2;
+  }
 
-    if (!response.ok) {
-      throw new Error("OpenAI API error");
+  /**
+   * Runs the risk analysis for a given contract's extracted text.
+   * Text extraction from the uploaded file happens upstream (backend/contracts module);
+   * this service only ever deals with plain text.
+   */
+  async analyzeContract(contractText: string): Promise<ContractAnalysis> {
+    let lastError: unknown;
+
+    for (let attempt = 1; attempt <= this.maxAttempts; attempt++) {
+      try {
+        const completion = await this.client.chat.completions.create({
+          model: this.model,
+          temperature: 0,
+          response_format: { type: "json_object" },
+          messages: [
+            { role: "system", content: DEAL_GUARDIAN_SYSTEM_PROMPT },
+            { role: "user", content: buildDealGuardianUserPrompt(contractText) },
+          ],
+        });
+
+        const raw = completion.choices[0]?.message?.content;
+        if (!raw) {
+          throw new Error("Empty response from gpt-4o");
+        }
+
+        return parseContractAnalysis(raw);
+      } catch (err) {
+        lastError = err;
+        // Only retry on parse/validation failures, not on network/auth errors.
+        if (!(err instanceof Error) || attempt === this.maxAttempts) {
+          break;
+        }
+      }
     }
 
-    const data = await response.json();
-    return JSON.parse(data.choices[0].message.content);
-  } catch (err: any) {
-    throw new Error(`Failed to analyze contract with AI Deal Guardian: ${err.message}`);
+    throw new Error(
+      `AI Deal Guardian failed to produce a valid analysis after ${this.maxAttempts} attempt(s): ${
+        lastError instanceof Error ? lastError.message : String(lastError)
+      }`
+    );
   }
 }

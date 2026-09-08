@@ -1,38 +1,62 @@
-import express from "express";
-import cors from "cors";
-import { analyzeContract } from "./deal-guardian/dealGuardian.service.js";
-import { calculateTrustScore } from "./trust-score/trustScore.service.js";
+/**
+ * index.ts
+ * Main export router for the AI Deal Guardian & Trust Score modules.
+ *
+ * `backend/src/modules/ai` should import `createAiEngineRouter` and mount it,
+ * supplying a Prisma-backed TrustScoreRepository and (optionally) hooks for
+ * persisting contract analyses and wiring the CRITICAL-flag Trust Score event.
+ *
+ * Example (in backend/):
+ *
+ *   import { createAiEngineRouter } from "../../../ai-engine/src";
+ *   import { prismaTrustScoreRepository } from "./trustScore.prisma";
+ *
+ *   app.use(
+ *     "/api/v1/ai",
+ *     createAiEngineRouter({
+ *       trustScoreRepository: prismaTrustScoreRepository,
+ *       dealGuardianHooks: {
+ *         onAnalysisComplete: async ({ contractId, analysis }) => {
+ *           await prisma.contractAnalysis.upsert({ ... });
+ *         },
+ *         onCriticalFlag: async ({ dealId, contractId }) => {
+ *           const deal = await prisma.deal.findUniqueOrThrow({ where: { id: dealId } });
+ *           await trustScoreService.applyEvent({
+ *             type: "AI_GUARDIAN_CRITICAL_FLAG",
+ *             userId: deal.creatorId,
+ *             sourceId: contractId,
+ *           });
+ *         },
+ *       },
+ *     })
+ *   );
+ */
 
-const app = express();
-app.use(cors());
-app.use(express.json());
+import { Router } from "express";
+import { DealGuardianService, DealGuardianServiceOptions } from "./deal-guardian/dealGuardian.service";
+import { createDealGuardianRouter, DealGuardianControllerHooks } from "./deal-guardian/dealGuardian.controller";
+import { createTrustScoreRouter } from "./trust-score/trustScore.controller";
+import { TrustScoreRepository } from "./trust-score/trustScore.types";
 
-const PORT = process.env.PORT || 5001;
+export interface AiEngineRouterOptions {
+  trustScoreRepository: TrustScoreRepository;
+  dealGuardianOptions?: DealGuardianServiceOptions;
+  dealGuardianHooks?: DealGuardianControllerHooks;
+}
 
-// AI Deal Guardian Endpoint
-app.post("/api/v1/guardian/analyze", async (req, res) => {
-  try {
-    const { text } = req.body;
-    if (!text) {
-      return res.status(400).json({ error: "Text is required" });
-    }
-    const analysis = await analyzeContract(text);
-    res.json({ success: true, data: analysis });
-  } catch (error: any) {
-    res.status(500).json({ success: false, error: error.message });
-  }
-});
+export function createAiEngineRouter(options: AiEngineRouterOptions): Router {
+  const router = Router();
 
-// Trust Score Endpoint
-app.post("/api/v1/trust/calculate", (req, res) => {
-  try {
-    const score = calculateTrustScore(req.body);
-    res.json({ success: true, data: { score } });
-  } catch (error: any) {
-    res.status(400).json({ success: false, error: "Invalid input data" });
-  }
-});
+  const dealGuardianService = new DealGuardianService(options.dealGuardianOptions);
 
-app.listen(PORT, () => {
-  console.log(`AI Deal Guardian & Trust Score Service running on port ${PORT}`);
-});
+  router.use("/deal-guardian", createDealGuardianRouter(dealGuardianService, options.dealGuardianHooks));
+  router.use("/trust-score", createTrustScoreRouter(options.trustScoreRepository));
+
+  return router;
+}
+
+// Re-export building blocks for direct use/testing from backend/ or elsewhere.
+export { DealGuardianService } from "./deal-guardian/dealGuardian.service";
+export { TrustScoreService } from "./trust-score/trustScore.service";
+export * from "./deal-guardian/dealGuardian.schema";
+export * from "./trust-score/trustScore.types";
