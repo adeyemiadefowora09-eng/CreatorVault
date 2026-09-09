@@ -10,6 +10,12 @@ import type {
   DealGuardianReport,
 } from "@/types/deal-guardian";
 
+interface ApiEnvelope<T> {
+  success: boolean;
+  message: string;
+  data: T;
+}
+
 const DEAL_GUARDIAN_KEY = ["deal-guardian", "reports"] as const;
 
 /** Fetches the signed-in user's contract analysis history. */
@@ -17,8 +23,10 @@ export function useDealGuardianReports() {
   return useQuery({
     queryKey: DEAL_GUARDIAN_KEY,
     queryFn: async () => {
-      const { data } = await api.get<DealGuardianReport[]>("/deal-guardian/reports");
-      return data;
+      const { data } = await api.get<ApiEnvelope<DealGuardianReport[]>>(
+        "/deal-guardian/reports"
+      );
+      return data.data;
     },
   });
 }
@@ -28,10 +36,10 @@ export function useDealGuardianReport(reportId: string | null) {
   return useQuery({
     queryKey: [...DEAL_GUARDIAN_KEY, reportId],
     queryFn: async () => {
-      const { data } = await api.get<DealGuardianReport>(
+      const { data } = await api.get<ApiEnvelope<DealGuardianReport>>(
         `/deal-guardian/reports/${reportId}`
       );
-      return data;
+      return data.data;
     },
     enabled: Boolean(reportId),
   });
@@ -48,12 +56,12 @@ export function useAnalyzeContract() {
       formData.append("dealTitle", payload.dealTitle);
       formData.append("counterpartyName", payload.counterpartyName);
 
-      const { data } = await api.post<DealGuardianReport>(
+      const { data } = await api.post<ApiEnvelope<DealGuardianReport>>(
         "/deal-guardian/analyze",
         formData,
         { headers: { "Content-Type": "multipart/form-data" } }
       );
-      return data;
+      return data.data;
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: DEAL_GUARDIAN_KEY });

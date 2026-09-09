@@ -122,7 +122,16 @@ export async function listPayments(userId: string, query: any) {
   };
 
   const [items, total] = await Promise.all([
-    prisma.payment.findMany({ where, skip, take: limit, orderBy: { createdAt: "desc" } }),
+    prisma.payment.findMany({
+      where,
+      skip,
+      take: limit,
+      orderBy: { createdAt: "desc" },
+      include: {
+        deal: { select: { title: true } },
+        milestone: { select: { title: true } },
+      },
+    }),
     prisma.payment.count({ where }),
   ]);
 

@@ -21,7 +21,7 @@ import axios, {
 } from "axios";
 import { useAuthStore } from "@/stores/authStore";
 
-const BASE_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000/api/v1";
+const BASE_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:5000/api/v1";
 
 // A request config extended with a private retry flag so we don't
 // attempt to refresh + retry the same request more than once.
