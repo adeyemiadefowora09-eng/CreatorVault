@@ -18,3 +18,11 @@ export async function list(req: Request, res: Response, next: NextFunction) {
     sendSuccess(res, result, "Disputes retrieved");
   } catch (err) { next(err); }
 }
+
+export async function resolve(req: Request, res: Response, next: NextFunction) {
+  try {
+    const user = (req as AuthRequest).user;
+    const result = await disputesService.resolveDispute(req.params.id, user.id, req.body);
+    sendSuccess(res, result, "Dispute resolved");
+  } catch (err) { next(err); }
+}

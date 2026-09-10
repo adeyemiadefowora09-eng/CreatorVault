@@ -1,6 +1,7 @@
 import { prisma } from "../../config/db.js";
 import { ApiError } from "../../utils/apiError.js";
 import { applyTrustScoreReview } from "../trust-score/trustScore.instance.js";
+import { createNotification } from "../notifications/notifications.service.js";
 
 export async function createReview(userId: string, data: any) {
   const deal = await prisma.deal.findUnique({ where: { id: data.dealId } });
@@ -25,6 +26,14 @@ export async function createReview(userId: string, data: any) {
 
   // Only awards points above 4.5 stars — see TrustScoreService.applyReview.
   await applyTrustScoreReview(revieweeId, review.id, data.rating);
+
+  await createNotification({
+    userId: revieweeId,
+    type: "REVIEW_RECEIVED",
+    title: "New review",
+    message: `You received a ${data.rating}/5 review on "${deal.title}".`,
+    metadata: { dealId: deal.id, reviewId: review.id },
+  });
 
   return review;
 }

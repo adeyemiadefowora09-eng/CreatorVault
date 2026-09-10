@@ -3,8 +3,304 @@ generator client {
 }
 
 datasource db {
-  provider = "postgresql"
-  url      = env("DATABASE_URL")
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+model User {
+  id                  String               @id @default(uuid())
+  email               String               @unique
+  passwordHash        String
+  name                String
+  role                UserRole
+  avatarUrl           String?
+  bio                 String?
+  country             String?
+  trustScore          Float                @default(50)
+  emailVerified       Boolean              @default(false)
+  createdAt           DateTime             @default(now())
+  updatedAt           DateTime             @updatedAt
+  brandProfile        BrandProfile?
+  creatorProfile      CreatorProfile?
+  dealGuardianReports DealGuardianReport[]
+  dealsAsBrand        Deal[]               @relation("BrandDeals")
+  dealsAsCreator      Deal[]               @relation("CreatorDeals")
+  disputesRaised      Dispute[]
+  messagesSent        Message[]            @relation("MessagesSent")
+  notifications       Notification[]
+  paymentsReceived    Payment[]            @relation("PayeePayments")
+  paymentsMade        Payment[]            @relation("PayerPayments")
+  payouts             Payout[]
+  refreshTokens       RefreshToken[]
+  reviewsReceived     Review[]             @relation("RevieweeReviews")
+  reviewsWritten      Review[]             @relation("ReviewerReviews")
+  trustScoreEvents    TrustScoreEvent[]
+
+  @@map("users")
+}
+
+model CreatorProfile {
+  id                String   @id @default(uuid())
+  userId            String   @unique
+  categories        String[] @default([])
+  portfolioUrl      String?
+  completedDeals    Int      @default(0)
+  avgRating         Float    @default(0)
+  socialLinks       Json?
+  bankAccountName   String?
+  bankAccountNumber String?
+  bankName          String?
+  bankCode          String?
+  user              User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("creator_profiles")
+}
+
+model BrandProfile {
+  id             String  @id @default(uuid())
+  userId         String  @unique
+  companyName    String?
+  industry       String?
+  website        String?
+  completedDeals Int     @default(0)
+  avgRating      Float   @default(0)
+  verified       Boolean @default(false)
+  user           User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("brand_profiles")
+}
+
+model Deal {
+  id           String      @id @default(uuid())
+  creatorId    String
+  brandId      String
+  title        String
+  description  String
+  amount       Decimal     @db.Decimal(12, 2)
+  currency     String      @default("NGN")
+  status       DealStatus  @default(DRAFT)
+  deliverables Json
+  deadline     DateTime
+  createdAt    DateTime    @default(now())
+  updatedAt    DateTime    @updatedAt
+  contract     Contract?
+  brand        User        @relation("BrandDeals", fields: [brandId], references: [id])
+  creator      User        @relation("CreatorDeals", fields: [creatorId], references: [id])
+  disputes     Dispute[]
+  messages     Message[]
+  milestones   Milestone[]
+  payments     Payment[]
+  reviews      Review[]
+
+  @@index([creatorId])
+  @@index([brandId])
+  @@index([status])
+  @@map("deals")
+}
+
+model Contract {
+  id              String            @id @default(uuid())
+  dealId          String            @unique
+  fileUrl         String?
+  rawText         String?
+  status          ContractStatus    @default(PENDING_REVIEW)
+  signedByCreator Boolean           @default(false)
+  signedByBrand   Boolean           @default(false)
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+  analysis        ContractAnalysis?
+  deal            Deal              @relation(fields: [dealId], references: [id], onDelete: Cascade)
+
+  @@map("contracts")
+}
+
+model ContractAnalysis {
+  id              String    @id @default(uuid())
+  contractId      String    @unique
+  riskLevel       RiskLevel
+  riskScore       Float
+  flaggedClauses  Json
+  summary         String
+  recommendations Json
+  analyzedAt      DateTime  @default(now())
+  contract        Contract  @relation(fields: [contractId], references: [id], onDelete: Cascade)
+
+  @@map("contract_analyses")
+}
+
+model Milestone {
+  id             String          @id @default(uuid())
+  dealId         String
+  title          String
+  description    String?
+  amount         Decimal         @db.Decimal(12, 2)
+  status         MilestoneStatus @default(PENDING)
+  orderIndex     Int
+  dueDate        DateTime
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+  submissionNote String?
+  submissionUrl  String?
+  submittedAt    DateTime?
+  deal           Deal            @relation(fields: [dealId], references: [id], onDelete: Cascade)
+  payment        Payment?
+
+  @@index([dealId])
+  @@map("milestones")
+}
+
+model Payment {
+  id          String          @id @default(uuid())
+  dealId      String
+  milestoneId String?         @unique
+  payerId     String
+  payeeId     String
+  amount      Decimal         @db.Decimal(12, 2)
+  currency    String          @default("NGN")
+  status      PaymentStatus   @default(PENDING)
+  providerRef String?
+  provider    PaymentProvider
+  paidAt      DateTime?
+  createdAt   DateTime        @default(now())
+  deal        Deal            @relation(fields: [dealId], references: [id])
+  milestone   Milestone?      @relation(fields: [milestoneId], references: [id])
+  payee       User            @relation("PayeePayments", fields: [payeeId], references: [id])
+  payer       User            @relation("PayerPayments", fields: [payerId], references: [id])
+
+  @@index([dealId])
+  @@index([payerId])
+  @@index([payeeId])
+  @@map("payments")
+}
+
+model Review {
+  id         String   @id @default(uuid())
+  dealId     String
+  reviewerId String
+  revieweeId String
+  rating     Int
+  comment    String
+  createdAt  DateTime @default(now())
+  deal       Deal     @relation(fields: [dealId], references: [id])
+  reviewee   User     @relation("RevieweeReviews", fields: [revieweeId], references: [id])
+  reviewer   User     @relation("ReviewerReviews", fields: [reviewerId], references: [id])
+
+  @@unique([dealId, reviewerId])
+  @@index([revieweeId])
+  @@map("reviews")
+}
+
+model Dispute {
+  id           String          @id @default(uuid())
+  dealId       String
+  raisedById   String
+  reason       String
+  status       DisputeStatus   @default(OPEN)
+  resolution   String?
+  evidence     Json?
+  createdAt    DateTime        @default(now())
+  resolvedAt   DateTime?
+  outcome      DisputeOutcome?
+  resolvedById String?
+  deal         Deal            @relation(fields: [dealId], references: [id])
+  raisedBy     User            @relation(fields: [raisedById], references: [id])
+
+  @@index([dealId])
+  @@map("disputes")
+}
+
+model Payout {
+  id                String       @id @default(uuid())
+  userId            String
+  amount            Decimal      @db.Decimal(12, 2)
+  currency          String       @default("NGN")
+  status            PayoutStatus @default(PENDING)
+  providerRef       String?
+  bankAccountNumber String
+  bankName          String
+  failureReason     String?
+  requestedAt       DateTime     @default(now())
+  completedAt       DateTime?
+  user              User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("payouts")
+}
+
+model Message {
+  id        String   @id @default(uuid())
+  dealId    String
+  senderId  String
+  body      String
+  read      Boolean  @default(false)
+  createdAt DateTime @default(now())
+  deal      Deal     @relation(fields: [dealId], references: [id], onDelete: Cascade)
+  sender    User     @relation("MessagesSent", fields: [senderId], references: [id])
+
+  @@index([dealId, createdAt])
+  @@map("messages")
+}
+
+model Notification {
+  id        String   @id @default(uuid())
+  userId    String
+  type      String
+  title     String
+  message   String
+  read      Boolean  @default(false)
+  metadata  Json?
+  createdAt DateTime @default(now())
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, read])
+  @@map("notifications")
+}
+
+model RefreshToken {
+  id        String   @id @default(uuid())
+  token     String   @unique
+  userId    String
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("refresh_tokens")
+}
+
+model TrustScoreEvent {
+  id             String   @id @default(uuid())
+  userId         String
+  type           String
+  points         Int
+  reason         String
+  resultingScore Int
+  sourceId       String?
+  metadata       Json?
+  createdAt      DateTime @default(now())
+  user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+  @@map("trust_score_events")
+}
+
+model DealGuardianReport {
+  id               String   @id @default(uuid())
+  userId           String
+  dealTitle        String
+  counterpartyName String
+  fileName         String
+  riskLevel        String
+  safetyScore      Int
+  summary          String
+  flaggedClauses   Json
+  recommendations  Json
+  analyzedAt       DateTime @default(now())
+  user             User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, analyzedAt])
+  @@map("deal_guardian_reports")
 }
 
 enum UserRole {
@@ -59,285 +355,20 @@ enum DisputeStatus {
   ESCALATED
 }
 
+enum DisputeOutcome {
+  UPHELD
+  DISMISSED
+}
+
 enum PaymentProvider {
   PAYAZA
   FLUTTERWAVE
   MANUAL
 }
 
-model User {
-  id            String   @id @default(uuid())
-  email         String   @unique
-  passwordHash  String
-  name          String
-  role          UserRole
-  avatarUrl     String?
-  bio           String?
-  country       String?
-  trustScore    Float    @default(0)
-  emailVerified Boolean  @default(false)
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
-
-  creatorProfile CreatorProfile?
-  brandProfile   BrandProfile?
-
-  dealsAsCreator Deal[]         @relation("CreatorDeals")
-  dealsAsBrand   Deal[]         @relation("BrandDeals")
-  paymentsMade   Payment[]      @relation("PayerPayments")
-  paymentsReceived Payment[]    @relation("PayeePayments")
-  reviewsWritten Review[]       @relation("ReviewerReviews")
-  reviewsReceived Review[]      @relation("RevieweeReviews")
-  disputesRaised Dispute[]
-  notifications  Notification[]
-  refreshTokens  RefreshToken[]
-  trustScoreEvents    TrustScoreEvent[]
-  dealGuardianReports DealGuardianReport[]
-
-  @@map("users")
-}
-
-model CreatorProfile {
-  id             String   @id @default(uuid())
-  userId         String   @unique
-  categories     String[] @default([])
-  portfolioUrl   String?
-  completedDeals Int      @default(0)
-  avgRating      Float    @default(0)
-  socialLinks    Json?
-
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  @@map("creator_profiles")
-}
-
-model BrandProfile {
-  id             String  @id @default(uuid())
-  userId         String  @unique
-  companyName    String?
-  industry       String?
-  website        String?
-  completedDeals Int     @default(0)
-  avgRating      Float   @default(0)
-  verified       Boolean @default(false)
-
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  @@map("brand_profiles")
-}
-
-model Deal {
-  id           String     @id @default(uuid())
-  creatorId    String
-  brandId      String
-  title        String
-  description  String
-  amount       Decimal    @db.Decimal(12, 2)
-  currency     String     @default("NGN")
-  status       DealStatus @default(DRAFT)
-  deliverables Json
-  deadline     DateTime
-  createdAt    DateTime   @default(now())
-  updatedAt    DateTime   @updatedAt
-
-  creator    User        @relation("CreatorDeals", fields: [creatorId], references: [id])
-  brand      User        @relation("BrandDeals", fields: [brandId], references: [id])
-  contract   Contract?
-  milestones Milestone[]
-  payments   Payment[]
-  reviews    Review[]
-  disputes   Dispute[]
-
-  @@index([creatorId])
-  @@index([brandId])
-  @@index([status])
-  @@map("deals")
-}
-
-model Contract {
-  id              String         @id @default(uuid())
-  dealId          String         @unique
-  fileUrl         String?
-  rawText         String?
-  status          ContractStatus @default(PENDING_REVIEW)
-  signedByCreator Boolean        @default(false)
-  signedByBrand   Boolean        @default(false)
-  createdAt       DateTime       @default(now())
-  updatedAt       DateTime       @updatedAt
-
-  deal     Deal              @relation(fields: [dealId], references: [id], onDelete: Cascade)
-  analysis ContractAnalysis?
-
-  @@map("contracts")
-}
-
-model ContractAnalysis {
-  id              String    @id @default(uuid())
-  contractId      String    @unique
-  riskLevel       RiskLevel
-  riskScore       Float
-  flaggedClauses  Json
-  summary         String
-  recommendations Json
-  analyzedAt      DateTime  @default(now())
-
-  contract Contract @relation(fields: [contractId], references: [id], onDelete: Cascade)
-
-  @@map("contract_analyses")
-}
-
-model Milestone {
-  id          String          @id @default(uuid())
-  dealId      String
-  title       String
-  description String?
-  amount      Decimal         @db.Decimal(12, 2)
-  status      MilestoneStatus @default(PENDING)
-  orderIndex  Int
-  dueDate     DateTime
-  createdAt   DateTime        @default(now())
-  updatedAt   DateTime        @updatedAt
-
-  deal    Deal      @relation(fields: [dealId], references: [id], onDelete: Cascade)
-  payment Payment?
-
-  @@index([dealId])
-  @@map("milestones")
-}
-
-model Payment {
-  id          String          @id @default(uuid())
-  dealId      String
-  milestoneId String?         @unique
-  payerId     String
-  payeeId     String
-  amount      Decimal         @db.Decimal(12, 2)
-  currency    String          @default("NGN")
-  status      PaymentStatus   @default(PENDING)
-  providerRef String?
-  provider    PaymentProvider
-  paidAt      DateTime?
-  createdAt   DateTime        @default(now())
-
-  deal      Deal       @relation(fields: [dealId], references: [id])
-  milestone Milestone? @relation(fields: [milestoneId], references: [id])
-  payer     User       @relation("PayerPayments", fields: [payerId], references: [id])
-  payee     User       @relation("PayeePayments", fields: [payeeId], references: [id])
-
-  @@index([dealId])
-  @@index([payerId])
-  @@index([payeeId])
-  @@map("payments")
-}
-
-model Review {
-  id         String   @id @default(uuid())
-  dealId     String
-  reviewerId String
-  revieweeId String
-  rating     Int
-  comment    String
-  createdAt  DateTime @default(now())
-
-  deal     Deal @relation(fields: [dealId], references: [id])
-  reviewer User @relation("ReviewerReviews", fields: [reviewerId], references: [id])
-  reviewee User @relation("RevieweeReviews", fields: [revieweeId], references: [id])
-
-  @@unique([dealId, reviewerId])
-  @@index([revieweeId])
-  @@map("reviews")
-}
-
-model Dispute {
-  id         String        @id @default(uuid())
-  dealId     String
-  raisedById String
-  reason     String
-  status     DisputeStatus @default(OPEN)
-  resolution String?
-  evidence   Json?
-  createdAt  DateTime      @default(now())
-  resolvedAt DateTime?
-
-  deal     Deal @relation(fields: [dealId], references: [id])
-  raisedBy User @relation(fields: [raisedById], references: [id])
-
-  @@index([dealId])
-  @@map("disputes")
-}
-
-model Notification {
-  id        String   @id @default(uuid())
-  userId    String
-  type      String
-  title     String
-  message   String
-  read      Boolean  @default(false)
-  metadata  Json?
-  createdAt DateTime @default(now())
-
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  @@index([userId, read])
-  @@map("notifications")
-}
-
-model RefreshToken {
-  id        String   @id @default(uuid())
-  token     String   @unique
-  userId    String
-  expiresAt DateTime
-  createdAt DateTime @default(now())
-
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  @@index([userId])
-  @@map("refresh_tokens")
-}
-
-// --- Trust Score Engine ---------------------------------------------------
-// Canonical, event-sourced trust score. `User.trustScore` remains the cached
-// current value (read on every profile/deal listing); this table is the
-// append-only history of every rule application that produced it, replacing
-// both the old ad hoc utils/trustScore.ts formula and the ai-engine
-// package's in-memory example implementation. See TrustScoreRepository in
-// ai-engine/src/trust-score/trustScore.types.ts for the interface this backs.
-model TrustScoreEvent {
-  id             String   @id @default(uuid())
-  userId         String
-  type           String
-  points         Int
-  reason         String
-  resultingScore Int
-  sourceId       String?
-  metadata       Json?
-  createdAt      DateTime @default(now())
-
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  @@index([userId, createdAt])
-  @@map("trust_score_events")
-}
-
-// --- AI Deal Guardian -------------------------------------------------------
-// Standalone contract-check reports (no dealId required — a creator can run
-// this before a deal even exists). Distinct from Contract/ContractAnalysis,
-// which stay linked to a real Deal in the contracts module.
-model DealGuardianReport {
-  id                String   @id @default(uuid())
-  userId            String
-  dealTitle         String
-  counterpartyName  String
-  fileName          String
-  riskLevel         String
-  safetyScore       Int
-  summary           String
-  flaggedClauses    Json
-  recommendations   Json
-  analyzedAt        DateTime @default(now())
-
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  @@index([userId, analyzedAt])
-  @@map("deal_guardian_reports")
+enum PayoutStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  FAILED
 }

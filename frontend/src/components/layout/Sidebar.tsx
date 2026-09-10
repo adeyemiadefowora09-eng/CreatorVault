@@ -11,11 +11,13 @@ import {
   Scale,
   Settings,
   User,
+  Users,
 } from "lucide-react";
 
 const NAV_ITEMS = [
   { href: "/", label: "Dashboard", icon: LayoutDashboard },
   { href: "/deals", label: "Deals", icon: Handshake },
+  { href: "/discover", label: "Discover", icon: Users },
   { href: "/deal-guardian", label: "Deal Guardian", icon: ShieldCheck },
   { href: "/trust-score", label: "Trust Score", icon: Gauge },
   { href: "/payments", label: "Payments", icon: CreditCard },

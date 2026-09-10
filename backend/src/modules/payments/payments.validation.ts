@@ -15,3 +15,7 @@ export const listPaymentsQuerySchema = z.object({
   status: z.enum(["PENDING", "PROCESSING", "COMPLETED", "FAILED", "REFUNDED"]).optional(),
   dealId: z.string().uuid().optional(),
 });
+
+export const requestPayoutSchema = z.object({
+  amount: z.number().positive("Amount must be positive"),
+});

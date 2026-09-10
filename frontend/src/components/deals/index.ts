@@ -1,1 +1,1 @@
-// Deal components (DealCard, DealForm, etc) go here
+export { DealCard, DealStatusBadge } from "./DealCard";

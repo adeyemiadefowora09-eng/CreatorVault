@@ -11,6 +11,10 @@ export const updateCreatorProfileSchema = z.object({
   categories: z.array(z.string()).optional(),
   portfolioUrl: z.string().url().optional(),
   socialLinks: z.record(z.string()).optional(),
+  bankAccountName: z.string().min(2).optional(),
+  bankAccountNumber: z.string().min(6).max(20).optional(),
+  bankName: z.string().min(2).optional(),
+  bankCode: z.string().optional(),
 });
 
 export const updateBrandProfileSchema = z.object({

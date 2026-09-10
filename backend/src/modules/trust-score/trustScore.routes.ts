@@ -32,7 +32,11 @@ router.get("/me", authenticate, async (req: Request, res: Response, next: NextFu
     const userId = (req as any).user.id as string;
     const record = await trustScoreService.getOrCreateScore(userId);
 
-    const recentEvents = [...record.history]
+    // SCORE_INITIALIZED is a synthetic bootstrap entry (see
+    // trustScore.repository.ts's createDefault) — not real activity, so it's
+    // excluded from what "Recent activity" shows.
+    const recentEvents = record.history
+      .filter((e) => e.type !== ("SCORE_INITIALIZED" as typeof e.type))
       .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
       .slice(0, 10);
 

@@ -16,7 +16,7 @@ import { cn } from "@/lib/utils";
 import type { TrustScoreEvent, TrustScoreSummary } from "@/types/trust-score";
 
 const TIER_STYLES: Record<
-  TrustScoreSummary["tier"],
+  string,
   { label: string; badge: string; gauge: string }
 > = {
   AT_RISK: {
@@ -41,6 +41,13 @@ const TIER_STYLES: Record<
   },
 };
 
+// Helper function to safely extract tier styles regardless of casing/undefined state
+function getTierStyle(tier?: string) {
+  if (!tier) return TIER_STYLES.BUILDING;
+  const normalizedKey = tier.toUpperCase();
+  return TIER_STYLES[normalizedKey] || TIER_STYLES.BUILDING;
+}
+
 const EVENT_ICONS: Record<TrustScoreEvent["type"], React.ElementType> = {
   DEAL_COMPLETED: CheckCircle2,
   DEAL_CANCELLED: ShieldX,
@@ -54,7 +61,7 @@ const EVENT_ICONS: Record<TrustScoreEvent["type"], React.ElementType> = {
 };
 
 export function TierBadge({ tier }: { tier: TrustScoreSummary["tier"] }) {
-  const style = TIER_STYLES[tier];
+  const style = getTierStyle(tier);
   return (
     <span
       className={cn(
@@ -74,7 +81,8 @@ interface TrustScoreGaugeProps {
 }
 
 export function TrustScoreGauge({ score, tier, size = 220 }: TrustScoreGaugeProps) {
-  const clamped = Math.min(100, Math.max(0, score));
+  const style = getTierStyle(tier);
+  const clamped = Math.min(100, Math.max(0, score ?? 0));
   const strokeWidth = 16;
   const radius = (size - strokeWidth) / 2;
   const cx = size / 2;
@@ -82,13 +90,13 @@ export function TrustScoreGauge({ score, tier, size = 220 }: TrustScoreGaugeProp
 
   const halfCircumference = Math.PI * radius;
   const offset = halfCircumference * (1 - clamped / 100);
-  const color = TIER_STYLES[tier].gauge;
+  const color = style.gauge;
 
   return (
     <div
       className="relative inline-flex flex-col items-center"
       role="img"
-      aria-label={`Trust score ${clamped} out of 100, tier ${TIER_STYLES[tier].label}`}
+      aria-label={`Trust score ${clamped} out of 100, tier ${style.label}`}
     >
       <svg width={size} height={size / 2 + strokeWidth / 2} viewBox={`0 0 ${size} ${size / 2 + strokeWidth / 2}`}>
         <path
@@ -119,7 +127,7 @@ export function TrustScoreGauge({ score, tier, size = 220 }: TrustScoreGaugeProp
 }
 
 export function EventDeltaRow({ event }: { event: TrustScoreEvent }) {
-  const Icon = EVENT_ICONS[event.type];
+  const Icon = EVENT_ICONS[event.type] || CheckCircle2;
   const isPositive = event.pointsDelta >= 0;
 
   return (
@@ -162,14 +170,14 @@ export function EventDeltaRow({ event }: { event: TrustScoreEvent }) {
 }
 
 export function TrustScoreBreakdown({ summary }: { summary: TrustScoreSummary }) {
-  const change = summary.currentScore - summary.previousScore;
+  const change = (summary?.currentScore ?? 0) - (summary?.previousScore ?? 0);
 
   return (
     <div className="grid grid-cols-1 gap-6 lg:grid-cols-[280px_1fr]">
       <Card>
         <CardContent className="flex flex-col items-center gap-3 pt-6">
-          <TrustScoreGauge score={summary.currentScore} tier={summary.tier} />
-          <TierBadge tier={summary.tier} />
+          <TrustScoreGauge score={summary?.currentScore ?? 0} tier={summary?.tier} />
+          <TierBadge tier={summary?.tier} />
           {change !== 0 && (
             <p
               className={cn(
@@ -190,7 +198,7 @@ export function TrustScoreBreakdown({ summary }: { summary: TrustScoreSummary })
           <CardDescription>What&apos;s moved your score lately.</CardDescription>
         </CardHeader>
         <CardContent className="divide-y divide-slate-100">
-          {summary.recentEvents.length === 0 ? (
+          {!summary?.recentEvents || summary.recentEvents.length === 0 ? (
             <p className="py-4 text-sm text-slate-400">
               No scoring activity yet — complete a deal to get started.
             </p>

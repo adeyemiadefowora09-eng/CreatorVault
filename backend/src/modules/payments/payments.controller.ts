@@ -16,7 +16,8 @@ export async function initialize(req: Request, res: Response, next: NextFunction
 
 export async function verify(req: Request, res: Response, next: NextFunction) {
   try {
-    const result = await paymentsService.verifyPayment(req.params.reference);
+    const user = (req as AuthRequest).user;
+    const result = await paymentsService.verifyPayment(req.params.reference, user.id);
     sendSuccess(res, result, "Payment verified");
   } catch (err) {
     next(err);
@@ -38,6 +39,36 @@ export async function stats(req: Request, res: Response, next: NextFunction) {
     const user = (req as AuthRequest).user;
     const result = await paymentsService.getPaymentStats(user.id);
     sendSuccess(res, result, "Stats retrieved");
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function payoutBalance(req: Request, res: Response, next: NextFunction) {
+  try {
+    const user = (req as AuthRequest).user;
+    const result = await paymentsService.getPayoutBalance(user.id);
+    sendSuccess(res, result, "Balance retrieved");
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function requestPayout(req: Request, res: Response, next: NextFunction) {
+  try {
+    const user = (req as AuthRequest).user;
+    const result = await paymentsService.requestPayout(user.id, req.body.amount);
+    sendSuccess(res, result, "Payout requested", 201);
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function listPayouts(req: Request, res: Response, next: NextFunction) {
+  try {
+    const user = (req as AuthRequest).user;
+    const result = await paymentsService.listPayouts(user.id);
+    sendSuccess(res, result, "Payouts retrieved");
   } catch (err) {
     next(err);
   }

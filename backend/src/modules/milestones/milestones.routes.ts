@@ -6,6 +6,7 @@ import {
   createMilestoneSchema,
   updateMilestoneSchema,
   rejectMilestoneSchema,
+  submitMilestoneSchema,
 } from "./milestones.validation.js";
 import * as milestonesController from "./milestones.controller.js";
 
@@ -15,7 +16,7 @@ const router = Router({ mergeParams: true });
 router.post("/", authenticate, requireRole("BRAND"), validate(createMilestoneSchema), milestonesController.add);
 router.get("/", authenticate, milestonesController.list);
 router.patch("/:milestoneId", authenticate, requireRole("BRAND"), validate(updateMilestoneSchema), milestonesController.update);
-router.post("/:milestoneId/submit", authenticate, requireRole("CREATOR"), milestonesController.submit);
+router.post("/:milestoneId/submit", authenticate, requireRole("CREATOR"), validate(submitMilestoneSchema), milestonesController.submit);
 router.post("/:milestoneId/approve", authenticate, requireRole("BRAND"), milestonesController.approve);
 router.post("/:milestoneId/reject", authenticate, requireRole("BRAND"), validate(rejectMilestoneSchema), milestonesController.reject);
 router.delete("/:milestoneId", authenticate, requireRole("BRAND"), milestonesController.remove);

@@ -1,13 +1,12 @@
-/**
- * dealGuardian.schema.ts
- * Zod schemas defining and validating the strict JSON contract analysis
- * shape returned by gpt-4o, per the implementation plan's
- * "AI Deal Guardian (Contract Risk Analysis)" spec.
- */
-
 import { z } from "zod";
 
-export const RiskLevelSchema = z.enum(["LOW", "MEDIUM", "HIGH", "CRITICAL"]);
+export const RiskLevelSchema = z.enum([
+  "LOW",
+  "MEDIUM",
+  "HIGH",
+  "CRITICAL",
+]);
+
 export type RiskLevel = z.infer<typeof RiskLevelSchema>;
 
 export const FlaggedClauseSchema = z.object({
@@ -15,45 +14,88 @@ export const FlaggedClauseSchema = z.object({
   explanation: z.string().min(1, "explanation is required"),
   severity: RiskLevelSchema,
 });
+
 export type FlaggedClause = z.infer<typeof FlaggedClauseSchema>;
 
+/**
+ * Raw response produced by the AI.
+ *
+ * The AI identifies risks and provides recommendations.
+ * It does NOT calculate the overall score or risk level.
+ */
+export const AIContractAnalysisSchema = z.object({
+  summary: z.string().min(1, "summary is required"),
+
+  flaggedClauses: z
+    .array(FlaggedClauseSchema)
+    .min(1, "at least one flagged clause is required"),
+
+  recommendations: z
+    .array(z.string().min(1))
+    .min(1, "at least one recommendation is required"),
+});
+
+export type AIContractAnalysis = z.infer<
+  typeof AIContractAnalysisSchema
+>;
+
+/**
+ * Final analysis returned by the backend.
+ *
+ * safetyScore is kept for compatibility with the existing backend/database.
+ *
+ * 0   = lowest risk
+ * 100 = highest risk
+ */
 export const ContractAnalysisSchema = z.object({
   riskLevel: RiskLevelSchema,
-  /** 0-100, higher = safer. Distinct from Trust Score; scoped to this single contract. */
-  safetyScore: z.number().min(0).max(100),
-  summary: z.string().min(1),
-  flaggedClauses: z.array(FlaggedClauseSchema).default([]),
-  recommendations: z.array(z.string().min(1)).default([]),
-});
-export type ContractAnalysis = z.infer<typeof ContractAnalysisSchema>;
 
-/** Request payload accepted by the analyze endpoint. */
+  safetyScore: z.number().min(0).max(100),
+
+  summary: z.string().min(1),
+
+  flaggedClauses: z.array(FlaggedClauseSchema),
+
+  recommendations: z.array(z.string().min(1)),
+});
+
+export type ContractAnalysis = z.infer<
+  typeof ContractAnalysisSchema
+>;
+
 export const AnalyzeContractRequestSchema = z.object({
   contractId: z.string().min(1),
   dealId: z.string().min(1),
-  /** Raw extracted text of the uploaded contract file. Extraction happens upstream in backend/. */
   contractText: z.string().min(1, "contractText must not be empty"),
 });
-export type AnalyzeContractRequest = z.infer<typeof AnalyzeContractRequestSchema>;
+
+export type AnalyzeContractRequest = z.infer<
+  typeof AnalyzeContractRequestSchema
+>;
 
 /**
- * Attempts to parse gpt-4o's raw JSON string response into a validated
- * ContractAnalysis. Throws a descriptive error on malformed or non-conforming output
- * so the caller can decide whether to retry the completion.
+ * Parses and validates the raw JSON returned by the AI.
  */
-export function parseContractAnalysis(rawJson: string): ContractAnalysis {
+export function parseAIContractAnalysis(
+  rawJson: string
+): AIContractAnalysis {
   let parsed: unknown;
+
   try {
     parsed = JSON.parse(rawJson);
   } catch {
-    throw new Error("AI Deal Guardian returned non-JSON output");
+    throw new Error(
+      "AI Deal Guardian returned non-JSON output"
+    );
   }
 
-  const result = ContractAnalysisSchema.safeParse(parsed);
+  const result = AIContractAnalysisSchema.safeParse(parsed);
+
   if (!result.success) {
     throw new Error(
       `AI Deal Guardian output failed schema validation: ${result.error.message}`
     );
   }
+
   return result.data;
 }

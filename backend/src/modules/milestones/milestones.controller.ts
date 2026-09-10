@@ -36,7 +36,7 @@ export async function update(req: Request, res: Response, next: NextFunction) {
 export async function submit(req: Request, res: Response, next: NextFunction) {
   try {
     const user = (req as AuthRequest).user;
-    const result = await milestonesService.submitMilestone(req.params.milestoneId, user.id);
+    const result = await milestonesService.submitMilestone(req.params.milestoneId, user.id, req.body);
     sendSuccess(res, result, "Milestone submitted");
   } catch (err) {
     next(err);

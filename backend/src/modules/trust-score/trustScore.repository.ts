@@ -38,6 +38,14 @@ async function loadRecord(userId: string): Promise<TrustScoreRecord | null> {
     orderBy: { createdAt: "asc" },
   });
 
+  // A user with zero events has never actually been scored — their
+  // `User.trustScore` column is just sitting at Prisma's schema default
+  // (0), not ai-engine's TRUST_SCORE_BASE (50). Report "not found" here so
+  // TrustScoreService.getOrCreateScore falls through to createDefault(),
+  // which sets the real starting score. Without this, every new user
+  // showed a trust score of 0 instead of 50.
+  if (events.length === 0) return null;
+
   return {
     userId: user.id,
     score: user.trustScore,
@@ -61,10 +69,24 @@ export const prismaTrustScoreRepository: TrustScoreRepository = {
 
   async createDefault(userId) {
     const defaultScore = TrustScoreService.defaultScore();
-    await prisma.user.update({
-      where: { id: userId },
-      data: { trustScore: defaultScore },
-    });
+    await prisma.$transaction([
+      prisma.user.update({
+        where: { id: userId },
+        data: { trustScore: defaultScore },
+      }),
+      // Persist a genesis event so this only happens once per user — without
+      // it, every subsequent read would find zero events again and re-run
+      // createDefault on every single call to GET /trust-score/me.
+      prisma.trustScoreEvent.create({
+        data: {
+          userId,
+          type: "SCORE_INITIALIZED",
+          points: 0,
+          reason: "Starting trust score",
+          resultingScore: defaultScore,
+        },
+      }),
+    ]);
     return {
       userId,
       score: defaultScore,

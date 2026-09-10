@@ -17,7 +17,7 @@ export function errorHandler(
       message: err.message,
       error: {
         code: err.code,
-        ...(err.details && { details: err.details }),
+        ...(err.details ? { details: err.details as Record<string, unknown> } : {}),
       },
     });
   }

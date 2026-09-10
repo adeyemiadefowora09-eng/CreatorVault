@@ -1,7 +1,8 @@
 import { prisma } from "../../config/db.js";
 import { ApiError } from "../../utils/apiError.js";
-import { CreateMilestoneInput, UpdateMilestoneInput } from "./milestones.validation.js";
+import { CreateMilestoneInput, SubmitMilestoneInput, UpdateMilestoneInput } from "./milestones.validation.js";
 import { applyTrustScoreEvent } from "../trust-score/trustScore.instance.js";
+import { createNotification } from "../notifications/notifications.service.js";
 
 async function verifyDealParty(dealId: string, userId: string) {
   const deal = await prisma.deal.findUnique({ where: { id: dealId } });
@@ -33,7 +34,7 @@ export async function addMilestone(
     throw ApiError.badRequest("Can only add milestones to DRAFT or NEGOTIATING deals");
   }
 
-  return prisma.milestone.create({
+  const milestone = await prisma.milestone.create({
     data: {
       dealId,
       title: data.title,
@@ -43,6 +44,16 @@ export async function addMilestone(
       orderIndex: data.orderIndex,
     },
   });
+
+  await createNotification({
+    userId: deal.creatorId,
+    type: "MILESTONE_ADDED",
+    title: "New milestone added",
+    message: `"${milestone.title}" was added to a deal you're part of.`,
+    metadata: { dealId, milestoneId: milestone.id },
+  });
+
+  return milestone;
 }
 
 export async function listMilestones(dealId: string, userId: string) {
@@ -83,7 +94,16 @@ export async function updateMilestone(
   });
 }
 
-export async function submitMilestone(milestoneId: string, userId: string) {
+/**
+ * Previously this just flipped status to SUBMITTED with no content —
+ * there was nothing for the brand to actually look at before approving
+ * or paying. Now requires (and stores) a note and/or a link.
+ */
+export async function submitMilestone(
+  milestoneId: string,
+  userId: string,
+  data: SubmitMilestoneInput
+) {
   const milestone = await prisma.milestone.findUnique({
     where: { id: milestoneId },
     include: { deal: true },
@@ -97,10 +117,25 @@ export async function submitMilestone(milestoneId: string, userId: string) {
     throw ApiError.badRequest("This milestone cannot be submitted");
   }
 
-  return prisma.milestone.update({
+  const updated = await prisma.milestone.update({
     where: { id: milestoneId },
-    data: { status: "SUBMITTED" },
+    data: {
+      status: "SUBMITTED",
+      submissionNote: data.submissionNote ?? null,
+      submissionUrl: data.submissionUrl ?? null,
+      submittedAt: new Date(),
+    },
   });
+
+  await createNotification({
+    userId: milestone.deal.brandId,
+    type: "MILESTONE_SUBMITTED",
+    title: "Milestone submitted for review",
+    message: `"${milestone.title}" was submitted and is ready for your review.`,
+    metadata: { dealId: milestone.dealId, milestoneId: milestone.id },
+  });
+
+  return updated;
 }
 
 export async function approveMilestone(milestoneId: string, userId: string) {
@@ -126,6 +161,14 @@ export async function approveMilestone(milestoneId: string, userId: string) {
     });
   }
 
+  await createNotification({
+    userId: milestone.deal.creatorId,
+    type: "MILESTONE_APPROVED",
+    title: "Milestone approved",
+    message: `"${milestone.title}" was approved. Payment can now be initiated.`,
+    metadata: { dealId: milestone.dealId, milestoneId: milestone.id },
+  });
+
   return updated;
 }
 
@@ -143,7 +186,7 @@ export async function rejectMilestone(
   if (milestone.deal.brandId !== userId) throw ApiError.forbidden("Only the brand can reject milestones");
   if (milestone.status !== "SUBMITTED") throw ApiError.badRequest("Only SUBMITTED milestones can be rejected");
 
-  return prisma.milestone.update({
+  const updated = await prisma.milestone.update({
     where: { id: milestoneId },
     data: {
       status: "IN_PROGRESS",
@@ -152,6 +195,16 @@ export async function rejectMilestone(
         : `[Rejected: ${reason}]`,
     },
   });
+
+  await createNotification({
+    userId: milestone.deal.creatorId,
+    type: "MILESTONE_REJECTED",
+    title: "Milestone sent back",
+    message: `"${milestone.title}" was rejected: ${reason}`,
+    metadata: { dealId: milestone.dealId, milestoneId: milestone.id },
+  });
+
+  return updated;
 }
 
 export async function deleteMilestone(milestoneId: string, userId: string) {

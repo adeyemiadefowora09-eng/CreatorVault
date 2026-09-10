@@ -4,6 +4,7 @@ import { ApiError } from "../../utils/apiError.js";
 import { getPaginationMeta } from "../../types/index.js";
 import { CreateDealInput, UpdateDealInput, ListDealsQuery } from "./deals.validation.js";
 import { applyTrustScoreEvent } from "../trust-score/trustScore.instance.js";
+import { createNotification } from "../notifications/notifications.service.js";
 
 const dealInclude = {
   creator: { select: { id: true, name: true, avatarUrl: true, trustScore: true } },
@@ -135,11 +136,21 @@ export async function proposeDeal(dealId: string, userId: string) {
   if (deal.brandId !== userId) throw ApiError.forbidden("Only the brand can propose this deal");
   if (deal.status !== "DRAFT") throw ApiError.badRequest("Only DRAFT deals can be proposed");
 
-  return prisma.deal.update({
+  const updated = await prisma.deal.update({
     where: { id: dealId },
     data: { status: "PROPOSED" },
     include: dealInclude,
   });
+
+  await createNotification({
+    userId: deal.creatorId,
+    type: "DEAL_PROPOSED",
+    title: "New deal proposal",
+    message: `"${deal.title}" was proposed to you. Review and accept or decline.`,
+    metadata: { dealId },
+  });
+
+  return updated;
 }
 
 export async function acceptDeal(dealId: string, userId: string) {
@@ -149,11 +160,21 @@ export async function acceptDeal(dealId: string, userId: string) {
   if (deal.creatorId !== userId) throw ApiError.forbidden("Only the assigned creator can accept");
   if (deal.status !== "PROPOSED") throw ApiError.badRequest("Only PROPOSED deals can be accepted");
 
-  return prisma.deal.update({
+  const updated = await prisma.deal.update({
     where: { id: dealId },
     data: { status: "ACTIVE" },
     include: dealInclude,
   });
+
+  await createNotification({
+    userId: deal.brandId,
+    type: "DEAL_ACCEPTED",
+    title: "Deal accepted",
+    message: `"${deal.title}" was accepted and is now active.`,
+    metadata: { dealId },
+  });
+
+  return updated;
 }
 
 export async function declineDeal(dealId: string, userId: string) {
@@ -163,11 +184,21 @@ export async function declineDeal(dealId: string, userId: string) {
   if (deal.creatorId !== userId) throw ApiError.forbidden("Only the assigned creator can decline");
   if (deal.status !== "PROPOSED") throw ApiError.badRequest("Only PROPOSED deals can be declined");
 
-  return prisma.deal.update({
+  const updated = await prisma.deal.update({
     where: { id: dealId },
     data: { status: "CANCELLED" },
     include: dealInclude,
   });
+
+  await createNotification({
+    userId: deal.brandId,
+    type: "DEAL_DECLINED",
+    title: "Deal declined",
+    message: `"${deal.title}" was declined by the creator.`,
+    metadata: { dealId },
+  });
+
+  return updated;
 }
 
 export async function completeDeal(dealId: string, userId: string) {
@@ -221,6 +252,15 @@ export async function completeDeal(dealId: string, userId: string) {
     ]);
   }
 
+  const counterpartyId = userId === deal.brandId ? deal.creatorId : deal.brandId;
+  await createNotification({
+    userId: counterpartyId,
+    type: "DEAL_COMPLETED",
+    title: "Deal completed",
+    message: `"${deal.title}" has been marked completed.`,
+    metadata: { dealId },
+  });
+
   return updated;
 }
 
@@ -248,11 +288,22 @@ export async function cancelDeal(dealId: string, userId: string) {
     }
   }
 
-  return prisma.deal.update({
+  const updated = await prisma.deal.update({
     where: { id: dealId },
     data: { status: "CANCELLED" },
     include: dealInclude,
   });
+
+  const counterpartyId = userId === deal.brandId ? deal.creatorId : deal.brandId;
+  await createNotification({
+    userId: counterpartyId,
+    type: "DEAL_CANCELLED",
+    title: "Deal cancelled",
+    message: `"${deal.title}" was cancelled.`,
+    metadata: { dealId },
+  });
+
+  return updated;
 }
 
 export async function deleteDeal(dealId: string, userId: string) {
