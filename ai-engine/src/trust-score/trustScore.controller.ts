@@ -28,9 +28,10 @@ export function createTrustScoreRouter(repository: TrustScoreRepository): Router
     try {
       const { userId } = req.params;
       const record = await service.getOrCreateScore(userId);
-      res.status(200).json({ success: true, data: record });
+      return res.status(200).json({ success: true, data: record });
     } catch (err) {
       next(err);
+      return;
     }
   });
 
@@ -51,9 +52,10 @@ export function createTrustScoreRouter(repository: TrustScoreRepository): Router
       }
 
       const result = await service.applyEvent({ type, userId, sourceId, metadata });
-      res.status(200).json({ success: true, data: result });
+      return res.status(200).json({ success: true, data: result });
     } catch (err) {
       next(err);
+      return;
     }
   });
 
@@ -71,13 +73,14 @@ export function createTrustScoreRouter(repository: TrustScoreRepository): Router
       }
 
       const result = await service.applyReview(userId, sourceId, rating);
-      res.status(200).json({
+      return res.status(200).json({
         success: true,
         data: result,
         applied: result !== null,
       });
     } catch (err) {
       next(err);
+      return;
     }
   });
 

@@ -52,9 +52,10 @@ export function createDealGuardianRouter(
         await hooks.onCriticalFlag({ dealId, contractId });
       }
 
-      res.status(200).json({ success: true, data: analysis });
+      return res.status(200).json({ success: true, data: analysis });
     } catch (err) {
       next(err);
+      return;
     }
   });
 
