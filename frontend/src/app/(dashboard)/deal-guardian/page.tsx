@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { ShieldCheck } from "lucide-react";
+import { GuardianLock } from "@/components/deal-guardian/GuardianLock";
 
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import {
@@ -30,7 +31,10 @@ export default function DealGuardianPage() {
       </header>
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-[360px_1fr]">
-        {/* Upload column */}
+        {<GuardianLock
+          riskLevel={activeReport?.riskLevel}
+          isAnalyzing={analyzeContract.isPending}
+        />}
         <div className="space-y-6">
           <Card>
             <CardHeader>

@@ -5,6 +5,7 @@ import { AlertCircle } from "lucide-react";
 import { TrustScoreBreakdown } from "@/components/trust-score";
 import { useTrustScore } from "@/hooks/useTrustScore";
 import { Card, CardContent } from "@/components/ui/card";
+import { TrustDial } from "@/components/trust-score/TrustDial";
 
 export default function TrustScorePage() {
   const { data: summary, isLoading, isError } = useTrustScore();
@@ -37,7 +38,12 @@ export default function TrustScorePage() {
         </Card>
       )}
 
-      {summary && <TrustScoreBreakdown summary={summary} />}
+      {summary && (
+        <div className="flex flex-col items-center gap-6">
+          <TrustDial score={summary.currentScore} />
+          <TrustScoreBreakdown summary={summary} />
+        </div>
+      )}
     </div>
   );
 }
