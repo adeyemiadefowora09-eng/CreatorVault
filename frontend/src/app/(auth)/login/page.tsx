@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
+import { Reveal } from "@/components/ui/reveal";
 import { useLogin, type LoginInput } from "@/hooks/useAuth";
 
 export default function LoginPage() {
@@ -23,6 +24,7 @@ export default function LoginPage() {
   };
 
   return (
+    <Reveal>
     <Card className="w-full max-w-sm">
       <CardHeader>
         <CardTitle className="text-xl">Log in to CreatorVault</CardTitle>
@@ -65,8 +67,8 @@ export default function LoginPage() {
             </div>
           )}
 
-          <Button type="submit" className="w-full" disabled={login.isPending}>
-            {login.isPending ? "Logging in…" : "Log in"}
+          <Button variant="fill" type="submit" className="w-full" disabled={login.isPending}>
+            <span>{login.isPending ? "Logging in…" : "Log in"}</span>
           </Button>
         </form>
 
@@ -78,5 +80,6 @@ export default function LoginPage() {
         </p>
       </CardContent>
     </Card>
+    </Reveal>
   );
 }

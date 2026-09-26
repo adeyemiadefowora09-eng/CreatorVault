@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
+import { Reveal } from "@/components/ui/reveal";
 import { useRegister, type RegisterInput } from "@/hooks/useAuth";
 
 export default function RegisterPage() {
@@ -26,6 +27,7 @@ export default function RegisterPage() {
   };
 
   return (
+    <Reveal>
     <Card className="w-full max-w-sm">
       <CardHeader>
         <CardTitle className="text-xl">Create your account</CardTitle>
@@ -103,8 +105,8 @@ export default function RegisterPage() {
             </div>
           )}
 
-          <Button type="submit" className="w-full" disabled={registerAccount.isPending}>
-            {registerAccount.isPending ? "Creating account…" : "Create account"}
+          <Button variant="fill" type="submit" className="w-full" disabled={registerAccount.isPending}>
+            <span>{registerAccount.isPending ? "Creating account…" : "Create account"}</span>
           </Button>
         </form>
 
@@ -116,5 +118,6 @@ export default function RegisterPage() {
         </p>
       </CardContent>
     </Card>
+    </Reveal>
   );
 }

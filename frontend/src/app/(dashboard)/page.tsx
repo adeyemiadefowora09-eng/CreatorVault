@@ -4,6 +4,8 @@ import Link from "next/link";
 import { Handshake, ShieldCheck, Gauge, CreditCard, ArrowRight } from "lucide-react";
 
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
+import { Reveal } from "@/components/ui/reveal";
+import { CountUp } from "@/components/ui/count-up";
 import { useAuthStore } from "@/stores/authStore";
 import { useTrustScore } from "@/hooks/useTrustScore";
 
@@ -58,7 +60,7 @@ export default function DashboardHomePage() {
             <div>
               <p className="text-xs text-muted-foreground">Trust Score</p>
               <p className="text-xl font-semibold text-foreground">
-                {trustScore.currentScore}
+              <CountUp target={trustScore.currentScore} />
                 <span className="text-sm font-normal text-muted-foreground">/100</span>
               </p>
             </div>
@@ -68,16 +70,18 @@ export default function DashboardHomePage() {
       </header>
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        {QUICK_LINKS.map(({ href, icon: Icon, title, description }) => (
-          <Link key={href} href={href}>
-            <Card className="h-full transition-colors hover:bg-muted/50">
+        {QUICK_LINKS.map(({ href, icon: Icon, title, description }, i) => (
+          <Reveal key={href} delay={i * 80}>
+            <Link href={href}>
+              <Card className="h-full transition-colors hover:bg-muted/50">
               <CardHeader>
                 <Icon className="h-5 w-5 text-primary" aria-hidden="true" />
                 <CardTitle className="mt-2 text-base">{title}</CardTitle>
                 <CardDescription>{description}</CardDescription>
               </CardHeader>
             </Card>
-          </Link>
+            </Link>
+          </Reveal>
         ))}
       </div>
 
