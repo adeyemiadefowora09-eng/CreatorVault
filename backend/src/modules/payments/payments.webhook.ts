@@ -3,7 +3,7 @@ import crypto from "crypto";
 import { config } from "../../config/env.js";
 import { sendSuccess } from "../../utils/apiResponse.js";
 import { prisma } from "../../config/db.js";
-import { createNotification } from "../notifications/notifications.service.js";
+import { markPaymentCompletedForWebhook } from "./payments.service.js";
 
 // Payaza webhook handler
 export async function handleWebhook(req: Request, res: Response, next: NextFunction) {
@@ -27,25 +27,7 @@ export async function handleWebhook(req: Request, res: Response, next: NextFunct
       
       const payment = await prisma.payment.findFirst({ where: { providerRef: reference } });
       if (payment && payment.status !== "COMPLETED") {
-        await prisma.payment.update({
-          where: { id: payment.id },
-          data: { status: "COMPLETED", paidAt: new Date() }
-        });
-
-        if (payment.milestoneId) {
-          await prisma.milestone.update({
-            where: { id: payment.milestoneId },
-            data: { status: "PAID" }
-          });
-        }
-
-        await createNotification({
-          userId: payment.payeeId,
-          type: "PAYMENT_COMPLETED",
-          title: "Payment received",
-          message: `A payment of ${payment.amount} ${payment.currency} has landed in your CreatorVault balance.`,
-          metadata: { dealId: payment.dealId, paymentId: payment.id },
-        });
+        await markPaymentCompletedForWebhook(payment);
       }
     }
 

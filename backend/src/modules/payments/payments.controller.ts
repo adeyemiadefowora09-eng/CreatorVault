@@ -24,6 +24,25 @@ export async function verify(req: Request, res: Response, next: NextFunction) {
   }
 }
 
+export async function mode(req: Request, res: Response, next: NextFunction) {
+  try {
+    const result = await paymentsService.getPaymentMode();
+    sendSuccess(res, result, "Payment mode retrieved");
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function confirmMock(req: Request, res: Response, next: NextFunction) {
+  try {
+    const user = (req as AuthRequest).user;
+    const result = await paymentsService.confirmMockPayment(req.params.reference, user.id);
+    sendSuccess(res, result, "Payment confirmed");
+  } catch (err) {
+    next(err);
+  }
+}
+
 export async function list(req: Request, res: Response, next: NextFunction) {
   try {
     const user = (req as AuthRequest).user;

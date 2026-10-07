@@ -14,15 +14,56 @@ interface ApiEnvelope<T> {
   meta?: { page: number; limit: number; total: number; totalPages: number };
 }
 
-/** POST /payments/initialize — real call through to Payaza; returns a checkoutUrl to send the brand to. */
+/**
+ * POST /payments/initialize — starts a payment for an approved milestone.
+ * In live mode this returns a real Payaza checkoutUrl to send the brand
+ * to; in demo mode (no PAYAZA_API_KEY configured on the backend) there's
+ * no gateway to redirect to, so checkoutUrl is null and `mock: true` —
+ * the UI should show an in-app "confirm payment" step instead (see
+ * useConfirmMockPayment below).
+ */
 export function useInitializePayment() {
+  const queryClient = useQueryClient();
   return useMutation({
     mutationFn: async (input: { dealId: string; milestoneId: string }) => {
-      const { data } = await api.post<ApiEnvelope<{ payment: Payment; checkoutUrl: string }>>(
-        "/payments/initialize",
-        input
-      );
+      const { data } = await api.post<
+        ApiEnvelope<{ payment: Payment; checkoutUrl: string | null; mock?: boolean; reference?: string }>
+      >("/payments/initialize", input);
       return data.data;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["payments"] });
+    },
+  });
+}
+
+/** GET /payments/mode — whether the backend has real Payaza credentials configured. */
+export function usePaymentMode() {
+  return useQuery({
+    queryKey: ["payments", "mode"],
+    queryFn: async () => {
+      const { data } = await api.get<ApiEnvelope<{ live: boolean }>>("/payments/mode");
+      return data.data;
+    },
+    staleTime: Infinity,
+  });
+}
+
+/**
+ * POST /payments/mock/:reference/confirm — demo-mode-only. Simulates the
+ * brand's checkout succeeding, which is what a real Payaza webhook would
+ * otherwise report. Only callable when usePaymentMode() says `live: false`.
+ */
+export function useConfirmMockPayment() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (reference: string) => {
+      const { data } = await api.post<ApiEnvelope<Payment>>(`/payments/mock/${reference}/confirm`);
+      return data.data;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["payments"] });
+      queryClient.invalidateQueries({ queryKey: ["deals"] });
     },
   });
 }

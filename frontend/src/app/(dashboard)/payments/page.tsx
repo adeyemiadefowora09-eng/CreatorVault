@@ -6,7 +6,7 @@ import { AlertCircle, CreditCard, Wallet } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { usePayments, usePaymentStats, usePayoutBalance, usePayouts, useRequestPayout } from "@/hooks/usePayments";
+import { usePayments, usePaymentStats, usePayoutBalance, usePayouts, useRequestPayout, usePaymentMode } from "@/hooks/usePayments";
 import { useMe } from "@/hooks/useProfile";
 import { useAuthStore } from "@/stores/authStore";
 import type { Payment, PaymentStatus, Payout, PayoutStatus } from "@/types/payments";
@@ -202,6 +202,7 @@ export default function PaymentsPage() {
   const { data: payments, isLoading, isError } = usePayments();
   const { data: stats } = usePaymentStats();
   const { data: payouts } = usePayouts();
+  const { data: paymentMode } = usePaymentMode();
 
   const isCreator = user?.role === "CREATOR";
 
@@ -213,6 +214,17 @@ export default function PaymentsPage() {
           Milestone payouts and payment history for your deals.
         </p>
       </header>
+
+      {paymentMode && !paymentMode.live && (
+        <div className="flex items-start gap-2 rounded-lg bg-amber-500/10 p-3 text-sm text-amber-700 dark:text-amber-400">
+          <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+          <span>
+            Demo mode: no live payment provider is connected, so payments and payouts here are
+            simulated — no real money moves, but the flow (escrow → confirm → balance → withdraw)
+            works the same way a live one would.
+          </span>
+        </div>
+      )}
 
       {stats && (
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">

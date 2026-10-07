@@ -8,8 +8,10 @@ import { handleWebhook } from "./payments.webhook.js";
 
 const router = Router();
 
+router.get("/mode", authenticate, paymentsController.mode);
 router.post("/initialize", authenticate, requireRole("BRAND"), validate(initializePaymentSchema), paymentsController.initialize);
 router.post("/verify/:reference", authenticate, paymentsController.verify);
+router.post("/mock/:reference/confirm", authenticate, requireRole("BRAND"), paymentsController.confirmMock);
 router.get("/", authenticate, validateQuery(listPaymentsQuerySchema), paymentsController.list);
 router.get("/stats", authenticate, paymentsController.stats);
 

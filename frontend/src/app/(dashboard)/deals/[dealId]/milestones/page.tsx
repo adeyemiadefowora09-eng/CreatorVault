@@ -19,7 +19,7 @@ import {
   useRejectMilestone,
   useSubmitMilestone,
 } from "@/hooks/useMilestones";
-import { useInitializePayment } from "@/hooks/usePayments";
+import { useInitializePayment, usePayments, usePaymentMode, useConfirmMockPayment } from "@/hooks/usePayments";
 import { useAuthStore } from "@/stores/authStore";
 import type { CreateMilestoneInput, Milestone, MilestoneStatus } from "@/types/deals";
 
@@ -159,16 +159,24 @@ function MilestoneRow({ milestone, dealId, isBrand, isCreator }: {
   const approveMilestone = useApproveMilestone(dealId);
   const deleteMilestone = useDeleteMilestone(dealId);
   const initializePayment = useInitializePayment();
+  const confirmMockPayment = useConfirmMockPayment();
+  const { data: paymentMode } = usePaymentMode();
+  const { data: payments } = usePayments();
+
+  // Demo mode has no real checkout to redirect to, so a payment sits
+  // PENDING (money "in transit to escrow") until the brand explicitly
+  // confirms it — this finds that in-flight payment for this milestone so
+  // the confirm step survives a page refresh, not just local state.
+  const pendingPayment = payments?.find(
+    (p) => p.milestoneId === milestone.id && p.status === "PENDING"
+  );
 
   const handlePay = () => {
-    initializePayment.mutate(
-      { dealId, milestoneId: milestone.id },
-      {
-        onSuccess: (result) => {
-          if (result.checkoutUrl) window.open(result.checkoutUrl, "_blank", "noopener");
-        },
-      }
-    );
+    initializePayment.mutate({ dealId, milestoneId: milestone.id }, {
+      onSuccess: (result) => {
+        if (result.checkoutUrl) window.open(result.checkoutUrl, "_blank", "noopener");
+      },
+    });
   };
 
   return (
@@ -216,10 +224,28 @@ function MilestoneRow({ milestone, dealId, isBrand, isCreator }: {
             Submit for approval
           </Button>
         )}
-        {isBrand && milestone.status === "APPROVED" && (
+        {isBrand && milestone.status === "APPROVED" && !pendingPayment && (
           <Button size="sm" onClick={handlePay} disabled={initializePayment.isPending}>
-            {initializePayment.isPending ? "Starting payment…" : "Pay via Payaza"}
+            {initializePayment.isPending
+              ? "Starting payment…"
+              : paymentMode?.live
+                ? "Pay via Payaza"
+                : "Send to escrow"}
           </Button>
+        )}
+        {isBrand && pendingPayment && (
+          <Button
+            size="sm"
+            onClick={() => confirmMockPayment.mutate(pendingPayment.providerRef!)}
+            disabled={confirmMockPayment.isPending}
+          >
+            {confirmMockPayment.isPending ? "Confirming…" : `Confirm payment of ${pendingPayment.currency} ${pendingPayment.amount}`}
+          </Button>
+        )}
+        {isCreator && pendingPayment && (
+          <span className="inline-flex items-center rounded-full bg-amber-500/10 px-2.5 py-1 text-xs font-medium text-amber-600">
+            Payment sent — awaiting brand confirmation
+          </span>
         )}
         {isBrand && milestone.status === "SUBMITTED" && (
           <>
@@ -245,9 +271,14 @@ function MilestoneRow({ milestone, dealId, isBrand, isCreator }: {
       {rejecting && (
         <RejectMilestoneForm dealId={dealId} milestoneId={milestone.id} onDone={() => setRejecting(false)} />
       )}
-      {initializePayment.isError && (
+      {initializePayment.isError && paymentMode?.live && (
         <p className="mt-2 text-sm text-destructive">
           Payaza couldn&apos;t be reached — check PAYAZA_API_KEY/PAYAZA_BASE_URL in backend/.env.
+        </p>
+      )}
+      {confirmMockPayment.isError && (
+        <p className="mt-2 text-sm text-destructive">
+          Couldn&apos;t confirm that payment. Try again.
         </p>
       )}
     </div>
@@ -259,6 +290,7 @@ export default function MilestonesPage({ params }: { params: Promise<{ dealId: s
   const user = useAuthStore((s) => s.user);
   const { data: deal } = useDeal(dealId);
   const { data: milestones, isLoading, isError } = useMilestones(dealId);
+  const { data: paymentMode } = usePaymentMode();
   const [showForm, setShowForm] = useState(false);
 
   const isBrand = deal?.brandId === user?.id;
@@ -271,6 +303,16 @@ export default function MilestonesPage({ params }: { params: Promise<{ dealId: s
         <ArrowLeft className="h-4 w-4" aria-hidden="true" />
         Back to deal
       </Link>
+
+      {paymentMode && !paymentMode.live && (
+        <div className="flex items-start gap-2 rounded-lg bg-amber-500/10 p-3 text-sm text-amber-700 dark:text-amber-400">
+          <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+          <span>
+            Demo mode: no live payment provider is configured, so payments and payouts here are
+            simulated (no real money moves) but otherwise behave the same way a real one would.
+          </span>
+        </div>
+      )}
 
       <header className="flex flex-wrap items-end justify-between gap-4">
         <div>

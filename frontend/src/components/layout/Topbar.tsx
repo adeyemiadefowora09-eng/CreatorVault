@@ -6,6 +6,7 @@ import { Bell, LogOut } from "lucide-react";
 import { useAuthStore } from "@/stores/authStore";
 import { useLogout } from "@/hooks/useAuth";
 import { Button } from "@/components/ui/button";
+import { ThemeToggle } from "@/components/layout/ThemeToggle";
 import {
   useMarkAllNotificationsRead,
   useMarkNotificationRead,
@@ -115,6 +116,7 @@ export function Topbar() {
     <header className="flex h-14 shrink-0 items-center justify-between border-b border-border bg-background px-6">
       <div />
       <div className="flex items-center gap-3">
+        <ThemeToggle />
         {user && <NotificationBell />}
         {user && (
           <div className="text-right leading-tight">

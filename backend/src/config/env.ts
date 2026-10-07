@@ -16,7 +16,15 @@ const envSchema = z.object({
 
   PAYAZA_API_KEY: z.string().default(""),
   PAYAZA_SECRET_KEY: z.string().default(""),
-  PAYAZA_BASE_URL: z.string().default("https://router-live.payaza.africa"),
+  // api.payaza.africa is Payaza's real, confirmed base domain (the old
+  // default here — router-live.payaza.africa — doesn't match anything in
+  // Payaza's documented API and was almost certainly never going to work).
+  PAYAZA_BASE_URL: z.string().default("https://api.payaza.africa"),
+  // Payaza namespaces test vs. live traffic by URL segment
+  // (.../test/... vs .../live/...), not by which key you use. Set this to
+  // "live" once you've confirmed the checkout/payout payloads against your
+  // real dashboard docs and are ready to move real money.
+  PAYAZA_ENV: z.enum(["test", "live"]).default("test"),
 
   OPENAI_API_KEY: z.string().default(""),
 

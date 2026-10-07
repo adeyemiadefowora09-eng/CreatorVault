@@ -23,6 +23,17 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en" className={cn("font-sans", geist.variable, fraunces.variable)}>
+      <head>
+        {/* Set the `.dark` class before paint so switching themes doesn't
+            flash the wrong one on first load. Mirrors the logic in
+            src/stores/themeStore.ts — kept in sync manually since this
+            runs before any JS bundle (including zustand) is loaded. */}
+        <script
+          dangerouslySetInnerHTML={{
+            __html: `(function(){try{var s=localStorage.getItem("creatorvault-theme");var p=s?JSON.parse(s).state.preference:"system";var d=p==="dark"||(p==="system"&&window.matchMedia("(prefers-color-scheme: dark)").matches);if(d)document.documentElement.classList.add("dark");}catch(e){}})();`,
+          }}
+        />
+      </head>
       <body className="antialiased">
         <Providers>
           {children}
