@@ -21,9 +21,21 @@ const app = express();
 
 app.use(helmet());
 app.use(cors({ origin: config.CORS_ORIGIN, credentials: true }));
-app.use(cookieParser());
-app.use(express.json());
-app.use(defaultLimiter);
+app.use(
+  express.json({
+    verify: (req: any, _res, buf) => {
+      req.rawBody = buf;
+    },
+  })
+);
+
+// Exempt Payaza webhooks from default rate limiting to prevent dropping provider retries
+app.use((req, res, next) => {
+  if (req.path.startsWith("/api/v1/payments/webhook")) {
+    return next();
+  }
+  return defaultLimiter(req, res, next);
+});
 
 // Health check
 app.get("/api/health", (req, res) => {

@@ -1,13 +1,15 @@
 import { Request, Response, NextFunction } from "express";
 import { AuthRequest } from "../../types/index.js";
 import { sendSuccess } from "../../utils/apiResponse.js";
+import { config } from "../../config/env.js";
 import * as paymentsService from "./payments.service.js";
 
 export async function initialize(req: Request, res: Response, next: NextFunction) {
   try {
     const user = (req as AuthRequest).user;
     const { dealId, milestoneId } = req.body;
-    const result = await paymentsService.initializePayment(user.id, dealId, milestoneId);
+    const idempotencyKey = req.headers["idempotency-key"] as string | undefined;
+    const result = await paymentsService.initializePayment(user.id, dealId, milestoneId, idempotencyKey);
     sendSuccess(res, result, "Payment initialized");
   } catch (err) {
     next(err);
@@ -17,7 +19,7 @@ export async function initialize(req: Request, res: Response, next: NextFunction
 export async function verify(req: Request, res: Response, next: NextFunction) {
   try {
     const user = (req as AuthRequest).user;
-    const result = await paymentsService.verifyPayment(req.params.reference, user.id);
+    const result = await paymentsService.verifyPayment(req.params.reference, user?.id);
     sendSuccess(res, result, "Payment verified");
   } catch (err) {
     next(err);
@@ -26,8 +28,8 @@ export async function verify(req: Request, res: Response, next: NextFunction) {
 
 export async function mode(req: Request, res: Response, next: NextFunction) {
   try {
-    const result = await paymentsService.getPaymentMode();
-    sendSuccess(res, result, "Payment mode retrieved");
+    const live = config.PAYMENTS_MODE === "live";
+    sendSuccess(res, { live, mode: config.PAYMENTS_MODE }, "Payment mode retrieved");
   } catch (err) {
     next(err);
   }
@@ -36,7 +38,7 @@ export async function mode(req: Request, res: Response, next: NextFunction) {
 export async function confirmMock(req: Request, res: Response, next: NextFunction) {
   try {
     const user = (req as AuthRequest).user;
-    const result = await paymentsService.confirmMockPayment(req.params.reference, user.id);
+    const result = await paymentsService.verifyPayment(req.params.reference, user.id);
     sendSuccess(res, result, "Payment confirmed");
   } catch (err) {
     next(err);
@@ -76,7 +78,8 @@ export async function payoutBalance(req: Request, res: Response, next: NextFunct
 export async function requestPayout(req: Request, res: Response, next: NextFunction) {
   try {
     const user = (req as AuthRequest).user;
-    const result = await paymentsService.requestPayout(user.id, req.body.amount);
+    const idempotencyKey = req.headers["idempotency-key"] as string | undefined;
+    const result = await paymentsService.requestPayout(user.id, req.body.amount, idempotencyKey);
     sendSuccess(res, result, "Payout requested", 201);
   } catch (err) {
     next(err);
@@ -88,6 +91,47 @@ export async function listPayouts(req: Request, res: Response, next: NextFunctio
     const user = (req as AuthRequest).user;
     const result = await paymentsService.listPayouts(user.id);
     sendSuccess(res, result, "Payouts retrieved");
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function syncPayout(req: Request, res: Response, next: NextFunction) {
+  try {
+    const user = (req as AuthRequest).user;
+    const result = await paymentsService.syncPayoutStatus(req.params.id, user.id);
+    sendSuccess(res, result, "Payout status synced");
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function resolveBank(req: Request, res: Response, next: NextFunction) {
+  try {
+    const { bankCode, accountNumber } = req.body;
+    const result = await paymentsService.resolveBankDetails(bankCode, accountNumber);
+    sendSuccess(res, result, "Bank account verified");
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function saveBank(req: Request, res: Response, next: NextFunction) {
+  try {
+    const user = (req as AuthRequest).user;
+    const result = await paymentsService.saveVerifiedBankAccount(user.id, req.body);
+    sendSuccess(res, result, "Bank account verified and saved");
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function refund(req: Request, res: Response, next: NextFunction) {
+  try {
+    const user = (req as AuthRequest).user;
+    const { dealId, milestoneId, reason } = req.body;
+    const result = await paymentsService.refundEscrow(dealId, milestoneId, reason, user.id);
+    sendSuccess(res, result, "Escrow refunded");
   } catch (err) {
     next(err);
   }

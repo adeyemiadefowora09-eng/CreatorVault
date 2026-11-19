@@ -3,7 +3,7 @@
 import { use, useState } from "react";
 import Link from "next/link";
 import { useForm } from "react-hook-form";
-import { AlertCircle, ArrowLeft, ListChecks, Plus, Trash2 } from "lucide-react";
+import { AlertCircle, ArrowLeft, CheckCircle2, Clock, ListChecks, Plus, ShieldCheck, Trash2 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -19,7 +19,7 @@ import {
   useRejectMilestone,
   useSubmitMilestone,
 } from "@/hooks/useMilestones";
-import { useInitializePayment, usePayments, usePaymentMode, useConfirmMockPayment } from "@/hooks/usePayments";
+import { useInitializePayment } from "@/hooks/usePayments";
 import { useAuthStore } from "@/stores/authStore";
 import type { CreateMilestoneInput, Milestone, MilestoneStatus } from "@/types/deals";
 
@@ -159,40 +159,47 @@ function MilestoneRow({ milestone, dealId, isBrand, isCreator }: {
   const approveMilestone = useApproveMilestone(dealId);
   const deleteMilestone = useDeleteMilestone(dealId);
   const initializePayment = useInitializePayment();
-  const confirmMockPayment = useConfirmMockPayment();
-  const { data: paymentMode } = usePaymentMode();
-  const { data: payments } = usePayments();
 
-  // Demo mode has no real checkout to redirect to, so a payment sits
-  // PENDING (money "in transit to escrow") until the brand explicitly
-  // confirms it — this finds that in-flight payment for this milestone so
-  // the confirm step survives a page refresh, not just local state.
-  const pendingPayment = payments?.find(
-    (p) => p.milestoneId === milestone.id && p.status === "PENDING"
-  );
+  const isEscrowFunded = milestone.payment?.status === "COMPLETED" || milestone.status === "IN_PROGRESS";
+  const isApprovedOrPaid = milestone.status === "APPROVED" || milestone.status === "PAID";
 
   const handlePay = () => {
-    initializePayment.mutate({ dealId, milestoneId: milestone.id }, {
-      onSuccess: (result) => {
-        if (result.checkoutUrl) window.open(result.checkoutUrl, "_blank", "noopener");
-      },
-    });
+    initializePayment.mutate(
+      { dealId, milestoneId: milestone.id },
+      {
+        onSuccess: (result) => {
+          if (result.checkoutUrl) window.open(result.checkoutUrl, "_blank", "noopener");
+        },
+      }
+    );
   };
 
   return (
     <div className="border-b border-border px-4 py-3 last:border-b-0">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
-          <p className="text-sm font-medium text-foreground">{milestone.title}</p>
+          <div className="flex items-center gap-2">
+            <p className="text-sm font-medium text-foreground">{milestone.title}</p>
+            {isEscrowFunded && !isApprovedOrPaid && (
+              <span className="inline-flex items-center gap-1 rounded-full bg-blue-500/10 px-2 py-0.5 text-[11px] font-medium text-blue-600">
+                <ShieldCheck className="h-3 w-3" />
+                Escrow Secured
+              </span>
+            )}
+          </div>
           {milestone.description && (
             <p className="text-sm text-muted-foreground">{milestone.description}</p>
           )}
           <p className="mt-1 text-xs text-muted-foreground">
-            Due {new Date(milestone.dueDate).toLocaleDateString()}
+            Due {new Date(milestone.dueDate).toLocaleDateString()} · ₦{Number(milestone.amount).toLocaleString()}
           </p>
         </div>
         <span className={`shrink-0 rounded-full px-2.5 py-1 text-xs font-medium ${STATUS_STYLES[milestone.status]}`}>
-          {milestone.status.replace("_", " ")}
+          {milestone.status === "PAID"
+            ? "Escrow Released"
+            : milestone.status === "IN_PROGRESS"
+            ? "Escrow Funded"
+            : milestone.status.replace("_", " ")}
         </span>
       </div>
 
@@ -218,50 +225,56 @@ function MilestoneRow({ milestone, dealId, isBrand, isCreator }: {
           </div>
         )}
 
-      <div className="mt-2 flex flex-wrap gap-2">
-        {isCreator && (milestone.status === "PENDING" || milestone.status === "IN_PROGRESS") && !submitting && (
-          <Button size="sm" variant="secondary" onClick={() => setSubmitting(true)}>
-            Submit for approval
-          </Button>
-        )}
-        {isBrand && milestone.status === "APPROVED" && !pendingPayment && (
-          <Button size="sm" onClick={handlePay} disabled={initializePayment.isPending}>
-            {initializePayment.isPending
-              ? "Starting payment…"
-              : paymentMode?.live
-                ? "Pay via Payaza"
-                : "Send to escrow"}
-          </Button>
-        )}
-        {isBrand && pendingPayment && (
+      <div className="mt-2 flex flex-wrap items-center gap-2">
+        {/* BRAND ESCROW ACTIONS */}
+        {isBrand && !isEscrowFunded && !isApprovedOrPaid && (
           <Button
             size="sm"
-            onClick={() => confirmMockPayment.mutate(pendingPayment.providerRef!)}
-            disabled={confirmMockPayment.isPending}
+            onClick={handlePay}
+            disabled={initializePayment.isPending}
+            className="bg-emerald-600 text-white hover:bg-emerald-700"
           >
-            {confirmMockPayment.isPending ? "Confirming…" : `Confirm payment of ${pendingPayment.currency} ${pendingPayment.amount}`}
+            <ShieldCheck className="mr-1.5 h-4 w-4" />
+            {initializePayment.isPending ? "Starting checkout…" : `Fund Escrow (₦${Number(milestone.amount).toLocaleString()})`}
           </Button>
         )}
-        {isCreator && pendingPayment && (
-          <span className="inline-flex items-center rounded-full bg-amber-500/10 px-2.5 py-1 text-xs font-medium text-amber-600">
-            Payment sent — awaiting brand confirmation
-          </span>
-        )}
+
         {isBrand && milestone.status === "SUBMITTED" && (
           <>
-            <Button size="sm" onClick={() => approveMilestone.mutate(milestone.id)} disabled={approveMilestone.isPending}>
-              Approve
+            <Button
+              size="sm"
+              onClick={() => approveMilestone.mutate(milestone.id)}
+              disabled={approveMilestone.isPending}
+              className="bg-emerald-600 text-white hover:bg-emerald-700"
+            >
+              <CheckCircle2 className="mr-1.5 h-4 w-4" />
+              {approveMilestone.isPending ? "Releasing funds…" : "Approve & Release Funds"}
             </Button>
             <Button size="sm" variant="destructive" onClick={() => setRejecting((v) => !v)}>
               Reject
             </Button>
           </>
         )}
-        {isBrand && milestone.status === "PENDING" && (
+
+        {isBrand && milestone.status === "PENDING" && !isEscrowFunded && (
           <Button size="sm" variant="ghost" onClick={() => deleteMilestone.mutate(milestone.id)} disabled={deleteMilestone.isPending}>
             <Trash2 className="h-4 w-4" aria-hidden="true" />
             Remove
           </Button>
+        )}
+
+        {/* CREATOR ESCROW ACTIONS */}
+        {isCreator && isEscrowFunded && (milestone.status === "PENDING" || milestone.status === "IN_PROGRESS") && !submitting && (
+          <Button size="sm" variant="secondary" onClick={() => setSubmitting(true)} className="border border-blue-500/20 bg-blue-50 text-blue-700 hover:bg-blue-100">
+            Submit Deliverables
+          </Button>
+        )}
+
+        {isCreator && !isEscrowFunded && milestone.status === "PENDING" && (
+          <p className="flex items-center gap-1.5 text-xs text-amber-600">
+            <Clock className="h-3.5 w-3.5" />
+            Awaiting brand escrow funding before you begin work.
+          </p>
         )}
       </div>
 
@@ -271,14 +284,9 @@ function MilestoneRow({ milestone, dealId, isBrand, isCreator }: {
       {rejecting && (
         <RejectMilestoneForm dealId={dealId} milestoneId={milestone.id} onDone={() => setRejecting(false)} />
       )}
-      {initializePayment.isError && paymentMode?.live && (
+      {initializePayment.isError && (
         <p className="mt-2 text-sm text-destructive">
           Payaza couldn&apos;t be reached — check PAYAZA_API_KEY/PAYAZA_BASE_URL in backend/.env.
-        </p>
-      )}
-      {confirmMockPayment.isError && (
-        <p className="mt-2 text-sm text-destructive">
-          Couldn&apos;t confirm that payment. Try again.
         </p>
       )}
     </div>
@@ -290,7 +298,6 @@ export default function MilestonesPage({ params }: { params: Promise<{ dealId: s
   const user = useAuthStore((s) => s.user);
   const { data: deal } = useDeal(dealId);
   const { data: milestones, isLoading, isError } = useMilestones(dealId);
-  const { data: paymentMode } = usePaymentMode();
   const [showForm, setShowForm] = useState(false);
 
   const isBrand = deal?.brandId === user?.id;
@@ -303,16 +310,6 @@ export default function MilestonesPage({ params }: { params: Promise<{ dealId: s
         <ArrowLeft className="h-4 w-4" aria-hidden="true" />
         Back to deal
       </Link>
-
-      {paymentMode && !paymentMode.live && (
-        <div className="flex items-start gap-2 rounded-lg bg-amber-500/10 p-3 text-sm text-amber-700 dark:text-amber-400">
-          <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
-          <span>
-            Demo mode: no live payment provider is configured, so payments and payouts here are
-            simulated (no real money moves) but otherwise behave the same way a real one would.
-          </span>
-        </div>
-      )}
 
       <header className="flex flex-wrap items-end justify-between gap-4">
         <div>

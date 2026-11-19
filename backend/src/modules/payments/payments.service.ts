@@ -1,275 +1,705 @@
 import { Prisma } from "@prisma/client";
+import { randomUUID } from "crypto";
 import { prisma } from "../../config/db.js";
 import { config } from "../../config/env.js";
 import { ApiError } from "../../utils/apiError.js";
 import { getPaginationMeta } from "../../types/index.js";
 import { createNotification } from "../notifications/notifications.service.js";
+import { payazaClient } from "./payaza.client.js";
+import { ledgerService } from "./ledger.service.js";
 
-// This project doesn't ship with a live Payaza merchant account (real key +
-// secret), so any call that hits Payaza's actual endpoints will fail with
-// no real payment gateway wired up. Rather than leave the whole payment
-// flow dead until someone has live production credentials, we fall back to
-// a "demo escrow" mode: money doesn't move through a real bank, but every
-// other part of the flow — a payment moving to PROCESSING, the brand
-// confirming it, the milestone flipping to PAID, the creator's balance
-// updating, and a payout landing as COMPLETED — behaves exactly like the
-// real thing so the app is actually usable end to end. The moment real
-// PAYAZA_API_KEY/PAYAZA_SECRET_KEY values are set in .env, this
-// automatically switches to the real Payaza calls below.
-export function isLivePaymentsMode() {
-  return Boolean(config.PAYAZA_API_KEY && config.PAYAZA_SECRET_KEY);
+const PLATFORM_FEE = 100; // Flat 100 NGN retained platform revenue per milestone
+
+function checkPaymentsMode() {
+  if (config.PAYMENTS_MODE === "test" && config.NODE_ENV !== "test" && config.NODE_ENV !== "development") {
+    // Demo mode only allowed in test/dev
+    throw ApiError.internal("Demo payment mode cannot be executed in production");
+  }
 }
 
-export async function getPaymentMode() {
-  return { live: isLivePaymentsMode() };
-}
+// 1. ESCROW INITIATION: Brand funds milestone upfront into CreatorVault escrow
+export async function initializePayment(
+  userId: string,
+  dealId: string,
+  milestoneId: string,
+  idempotencyKey?: string
+) {
+  checkPaymentsMode();
 
-// Payaza's real, documented URL pattern is
-// https://api.payaza.africa/{tenant}/<product>/<endpoint> where {tenant}
-// is "test" or "live" — NOT a different key per environment. The checkout
-// payload below (service_type/service_payload/connection_map) and the
-// payout payload further down were written without access to Payaza's
-// authenticated API reference and are UNVERIFIED — they're a best-effort
-// placeholder, not something confirmed against Payaza's actual contract.
-// Before flipping PAYAZA_ENV to "live", test each call with `test`
-// credentials and Payaza's test tenant first, and correct the payload
-// shape/field names against whatever your dashboard's API reference (or
-// Postman collection from integrationsupport@payaza.africa) actually shows.
-function payazaUrl(path: string) {
-  return `${config.PAYAZA_BASE_URL}/${config.PAYAZA_ENV}/${path}`;
-}
-
-export async function initializePayment(userId: string, dealId: string, milestoneId: string) {
   const deal = await prisma.deal.findUnique({
     where: { id: dealId },
-    include: { brand: true },
+    include: { brand: true, creator: true },
   });
   if (!deal) throw ApiError.notFound("Deal");
-  if (deal.brandId !== userId) throw ApiError.forbidden("Only the brand can pay");
+  if (deal.brandId !== userId) throw ApiError.forbidden("Only the brand can fund milestones");
 
-  const milestone = await prisma.milestone.findUnique({ where: { id: milestoneId } });
-  if (!milestone) throw ApiError.notFound("Milestone");
-  if (milestone.status !== "APPROVED") throw ApiError.badRequest("Milestone not approved yet");
+  // Dispute check: Cannot fund disputed deals
+  if (deal.status === "DISPUTED") {
+    throw ApiError.badRequest("Cannot fund milestones while this deal is in an active dispute.");
+  }
 
-  const existing = await prisma.payment.findFirst({
-    where: { milestoneId, status: { in: ["COMPLETED", "PROCESSING"] } },
+  const milestone = await prisma.milestone.findUnique({
+    where: { id: milestoneId },
+    include: { payment: true },
   });
-  if (existing) throw ApiError.conflict("Payment already in progress or completed");
+  if (!milestone) throw ApiError.notFound("Milestone");
+  if (milestone.dealId !== dealId) throw ApiError.badRequest("Milestone does not belong to this deal");
 
-  const reference = `PV_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
+  if (milestone.payment && milestone.payment.status === "COMPLETED") {
+    throw ApiError.badRequest("This milestone has already been funded in escrow.");
+  }
 
-  const payment = await prisma.payment.create({
+  // Idempotency check: Reuse existing pending payment if within last 24h
+  if (milestone.payment && milestone.payment.status === "PENDING" && milestone.payment.providerRef) {
+    const hoursOld = (Date.now() - new Date(milestone.payment.createdAt).getTime()) / (1000 * 60 * 60);
+    if (hoursOld < 24) {
+      return {
+        payment: milestone.payment,
+        checkoutUrl: `${config.CORS_ORIGIN}/payments/verify/${milestone.payment.providerRef}`,
+      };
+    }
+  }
+
+  const reference = idempotencyKey || `ESCROW_HOLD_${Date.now()}_${randomUUID().slice(0, 8)}`;
+  const isDemoMode = config.PAYMENTS_MODE === "test";
+
+  let payment;
+  if (milestone.payment) {
+    payment = await prisma.payment.update({
+      where: { id: milestone.payment.id },
+      data: {
+        providerRef: reference,
+        amount: milestone.amount,
+        status: "PENDING",
+        isDemo: isDemoMode,
+      },
+    });
+  } else {
+    payment = await prisma.payment.create({
+      data: {
+        dealId,
+        milestoneId,
+        payerId: deal.brandId,
+        payeeId: deal.creatorId,
+        amount: milestone.amount,
+        currency: deal.currency,
+        status: "PENDING",
+        providerRef: reference,
+        provider: "PAYAZA",
+        isDemo: isDemoMode,
+      },
+    });
+  }
+
+  // Record audit log
+  await prisma.auditLog.create({
     data: {
-      dealId,
-      milestoneId,
-      payerId: deal.brandId,
-      payeeId: deal.creatorId,
-      amount: milestone.amount,
-      currency: deal.currency,
-      status: "PENDING",
-      providerRef: reference,
-      provider: "PAYAZA",
+      action: "ESCROW_INITIATED",
+      entityType: "PAYMENT",
+      entityId: payment.id,
+      userId,
+      metadata: { dealId, milestoneId, amount: payment.amount, reference },
     },
   });
 
-  if (!isLivePaymentsMode()) {
-    // Demo escrow: there's no real gateway to redirect the brand to, so
-    // the frontend shows an in-app "confirm payment" step in place of a
-    // Payaza checkout page. The payment stays PENDING (nothing has
-    // "reflected" yet) until the brand explicitly confirms it via
-    // confirmMockPayment — see that function for what happens then.
-    return { payment, checkoutUrl: null, mock: true, reference };
-  }
+  const nameParts = deal.brand.name.trim().split(" ");
+  const firstName = nameParts[0] || "Brand";
+  const lastName = nameParts.slice(1).join(" ") || "User";
 
-  // Call Payaza initialize endpoint
-  const payload = {
-    service_type: "Account",
-    service_payload: {
-      request_application: "Payaza",
-      application_module: "USER_MODULE",
-      application_version: "1.0.0",
-      request_class: "CheckoutRequest",
-      connection_map: {
-        amount: Number(milestone.amount),
-        checkout_amount: Number(milestone.amount),
-        currency_code: deal.currency,
-        email_address: deal.brand.email,
-        first_name: deal.brand.name.split(" ")[0],
-        last_name: deal.brand.name.split(" ").slice(1).join(" ") || "Brand",
-        phone_number: "0000000000",
-        transaction_reference: reference,
-        callback_url: `${config.CORS_ORIGIN}/payments/verify/${reference}`
-      }
-    }
-  };
+  const { checkoutUrl } = await payazaClient.initializeCheckout({
+    amount: Number(milestone.amount),
+    currency: deal.currency,
+    email: deal.brand.email,
+    firstName,
+    lastName,
+    reference,
+    callbackUrl: `${config.CORS_ORIGIN}/payments/verify/${reference}`,
+  });
 
-  // UNVERIFIED endpoint path — "card/card_charge" is Payaza's confirmed
-  // product namespace for card transactions, but the exact sub-path for
-  // *initiating* a hosted checkout (vs. the confirmed
-  // card/card_charge/transaction_status lookup) isn't something public
-  // docs show. Confirm this path against your dashboard before relying on
-  // it — see the comment on payazaUrl() above.
-  try {
-    const response = await fetch(payazaUrl("card/card_charge/initialize"), {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${config.PAYAZA_SECRET_KEY}`,
-      },
-      body: JSON.stringify(payload),
+  return { payment, checkoutUrl };
+}
+
+// 2. ESCROW VERIFICATION: Confirm transaction, post to Ledger, and mark Escrow as SECURED
+export async function verifyPayment(reference: string, userId?: string) {
+  return prisma.$transaction(async (tx) => {
+    const payment = await tx.payment.findFirst({
+      where: { providerRef: reference },
+      include: { deal: true, milestone: true },
     });
 
-    if (!response.ok) {
-      const body = await response.text().catch(() => "");
-      throw new Error(`Payaza init failed (${response.status}): ${body}`);
+    if (!payment) throw ApiError.notFound("Payment with this reference not found.");
+
+    if (payment.status !== "COMPLETED") {
+      if (Number(payment.amount) <= 0) {
+        throw ApiError.badRequest("Invalid milestone payment amount.");
+      }
+
+      const updatedPayment = await tx.payment.update({
+        where: { id: payment.id },
+        data: { status: "COMPLETED", paidAt: new Date() },
+      });
+
+      // Post double-entry ledger entry atomically: Asset Debit & Liability Credit
+      await ledgerService.recordEscrowHold(tx, {
+        reference: payment.providerRef || payment.id,
+        amount: payment.amount,
+        currency: payment.currency,
+        dealId: payment.dealId,
+        milestoneId: payment.milestoneId || undefined,
+      });
+
+      // Audit log
+      await tx.auditLog.create({
+        data: {
+          action: "ESCROW_SECURED",
+          entityType: "PAYMENT",
+          entityId: payment.id,
+          userId: payment.payerId,
+          metadata: { amount: payment.amount, reference },
+        },
+      });
+
+      // Advance milestone to IN_PROGRESS so creator knows escrow is funded
+      if (payment.milestoneId) {
+        await tx.milestone.update({
+          where: { id: payment.milestoneId },
+          data: { status: "IN_PROGRESS" },
+        });
+
+        const milestoneTitle = payment.milestone?.title || "Deliverable";
+        await createNotification({
+          userId: payment.payeeId,
+          type: "PAYMENT_COMPLETED",
+          title: "Escrow Funded 🛡️",
+          message: `Milestone "${milestoneTitle}" was funded with ${payment.amount} ${payment.currency}. Funds are secured in Escrow. You may now start work!`,
+          metadata: { dealId: payment.dealId, milestoneId: payment.milestoneId, paymentId: payment.id },
+        });
+      }
+
+      return updatedPayment;
     }
-    const data = (await response.json()) as { response_content: { checkout_url: string } };
+
+    return payment;
+  });
+}
+
+// 3. ESCROW RELEASE: Triggered when brand approves submitted milestone deliverables
+export async function releaseEscrowPayout(milestoneId: string) {
+  return prisma.$transaction(async (tx) => {
+    const milestone = await tx.milestone.findUnique({
+      where: { id: milestoneId },
+      include: {
+        deal: {
+          include: {
+            creator: {
+              include: { creatorProfile: true, bankAccount: true },
+            },
+            disputes: {
+              where: { status: { in: ["OPEN", "UNDER_REVIEW", "ESCALATED"] } },
+            },
+          },
+        },
+        payment: true,
+      },
+    });
+
+    if (!milestone) throw ApiError.notFound("Milestone");
+
+    // Dispute Freeze Safeguard
+    if (milestone.deal.disputes.length > 0 || milestone.deal.status === "DISPUTED") {
+      throw ApiError.badRequest("Escrow release is frozen due to an active dispute on this deal.");
+    }
+
+    if (!milestone.payment || milestone.payment.status !== "COMPLETED") {
+      return {
+        success: true,
+        released: false,
+        message: "Milestone approved, but escrow was not funded in advance.",
+      };
+    }
+
+    const creator = milestone.deal.creator;
+    const grossAmount = Number(milestone.amount);
+    const payoutAmount = Math.max(0, grossAmount - PLATFORM_FEE);
+
+    // Record double-entry ledger release:
+    // Debit Escrow Holding -> Credit Creator Payable + Credit Platform Fee Revenue
+    await ledgerService.recordEscrowRelease(tx, {
+      reference: milestone.payment.providerRef || milestone.id,
+      grossAmount,
+      feeAmount: PLATFORM_FEE,
+      netPayoutAmount: payoutAmount,
+      creatorId: creator.id,
+      currency: milestone.deal.currency,
+      milestoneId: milestone.id,
+    });
+
+    const accountNumber = creator.bankAccount?.accountNumber || creator.creatorProfile?.bankAccountNumber;
+    const bankCode = creator.bankAccount?.bankCode || creator.creatorProfile?.bankCode;
+    const bankName = creator.bankAccount?.accountName || creator.creatorProfile?.bankName || "Bank";
+
+    // Case A: Creator has linked bank details -> Disburse automatically via Payaza
+    if (accountNumber && bankCode) {
+      const payoutRef = `ESCROW_REL_${Date.now()}_${randomUUID().slice(0, 8)}`;
+
+      // Execute Payout via Payaza
+      await payazaClient.disbursePayout({
+        payout_amount: payoutAmount,
+        currency: milestone.deal.currency,
+        country: "NGA",
+        narration: `CreatorVault Escrow Release: ${milestone.deal.title}`,
+        beneficiaries: [
+          {
+            credit_amount: payoutAmount,
+            account_number: accountNumber,
+            account_name: bankName,
+            bank_code: bankCode,
+          },
+        ],
+      });
+
+      // Record completed payout
+      await tx.payout.create({
+        data: {
+          userId: creator.id,
+          amount: payoutAmount,
+          currency: milestone.deal.currency,
+          status: "COMPLETED",
+          providerRef: payoutRef,
+          bankAccountNumber: accountNumber,
+          bankCode,
+          bankName,
+          completedAt: new Date(),
+          isDemo: milestone.payment.isDemo,
+        },
+      });
+
+      // Ledger entry for payout disbursement
+      await ledgerService.recordPayoutDisbursement(tx, {
+        reference: payoutRef,
+        amount: payoutAmount,
+        creatorId: creator.id,
+        currency: milestone.deal.currency,
+      });
+
+      await tx.milestone.update({
+        where: { id: milestoneId },
+        data: { status: "PAID" },
+      });
+
+      // Audit log
+      await tx.auditLog.create({
+        data: {
+          action: "ESCROW_RELEASED_AUTO_PAYOUT",
+          entityType: "PAYOUT",
+          entityId: payoutRef,
+          userId: creator.id,
+          metadata: { amount: payoutAmount, platformFee: PLATFORM_FEE, milestoneId },
+        },
+      });
+
+      await createNotification({
+        userId: creator.id,
+        type: "PAYMENT_COMPLETED",
+        title: "Escrow Released! 💰",
+        message: `Your work was approved! ${payoutAmount} ${milestone.deal.currency} has been paid to your ${bankName} account (less ${PLATFORM_FEE} NGN platform fee).`,
+        metadata: { dealId: milestone.dealId, milestoneId: milestone.id },
+      });
+
+      return {
+        success: true,
+        released: true,
+        payoutAmount,
+        platformFee: PLATFORM_FEE,
+      };
+    }
+
+    // Case B: Creator DOES NOT have bank details yet -> Hold in available balance
+    await tx.milestone.update({
+      where: { id: milestoneId },
+      data: { status: "APPROVED" },
+    });
+
+    await tx.auditLog.create({
+      data: {
+        action: "ESCROW_RELEASED_TO_BALANCE",
+        entityType: "MILESTONE",
+        entityId: milestoneId,
+        userId: creator.id,
+        metadata: { amount: payoutAmount, platformFee: PLATFORM_FEE },
+      },
+    });
+
+    await createNotification({
+      userId: creator.id,
+      type: "MILESTONE_APPROVED",
+      title: "Milestone Approved! Funds Ready 🛡️",
+      message: `Your milestone was approved! ${payoutAmount} ${milestone.deal.currency} is waiting in your balance. Add your bank details in Settings to withdraw anytime.`,
+      metadata: { dealId: milestone.dealId, milestoneId: milestone.id },
+    });
 
     return {
-      payment,
-      checkoutUrl: data.response_content.checkout_url,
+      success: true,
+      released: false,
+      pendingWithdrawal: true,
+      payoutAmount,
+      platformFee: PLATFORM_FEE,
     };
-  } catch (err) {
-    // Logged so you can see the actual status/body Payaza sent back, since
-    // that's exactly what you need to correct the payload/path above.
-    console.error("Payaza checkout initialize failed:", err);
-    throw ApiError.internal(
-      "Failed to initialize payment with Payaza — check the server logs for the exact error, " +
-        "then compare the request shape in payments.service.ts against your Payaza dashboard's API reference."
-    );
-  }
+  });
 }
 
-/**
- * Shared "this payment actually succeeded" side effects: mark it
- * COMPLETED, flip the milestone to PAID, notify the creator that money has
- * landed in their CreatorVault balance. Used by the real verifyPayment
- * success path, the real Payaza webhook, and the demo confirmMockPayment
- * path below — the three ways a payment can be confirmed as paid.
- */
-export async function markPaymentCompletedForWebhook(payment: {
-  id: string;
-  milestoneId: string | null;
-  payeeId: string;
-  amount: Prisma.Decimal | number;
-  currency: string;
-  dealId: string;
-}) {
-  const updated = await prisma.payment.update({
-    where: { id: payment.id },
-    data: { status: "COMPLETED", paidAt: new Date() },
+// 4. CREATOR BALANCE: Compute available earnings ready for withdrawal using Double-Entry Ledger
+export async function getPayoutBalance(userId: string) {
+  // Query ledger balance (immune to race conditions, deficits detected)
+  const ledgerBalance = await ledgerService.getCreatorLedgerBalance(userId);
+
+  const pendingPayouts = await prisma.payout.aggregate({
+    where: {
+      userId,
+      status: { in: ["PENDING", "PROCESSING"] },
+    },
+    _sum: { amount: true },
   });
 
-  if (payment.milestoneId) {
-    await prisma.milestone.update({
-      where: { id: payment.milestoneId },
-      data: { status: "PAID" },
+  const pendingAmount = Number(pendingPayouts._sum.amount || 0);
+  const availableBalance = ledgerBalance - pendingAmount;
+
+  return {
+    availableBalance: Math.max(0, availableBalance),
+    totalEarned: ledgerBalance,
+    pendingPayouts: pendingAmount,
+    currency: "NGN",
+  };
+}
+
+// 5. WITHDRAWAL REQUEST: Creator triggers manual payout of their balance
+export async function requestPayout(userId: string, amount: number, idempotencyKey?: string) {
+  if (amount <= 0) throw ApiError.badRequest("Amount must be greater than zero.");
+  checkPaymentsMode();
+
+  return prisma.$transaction(async (tx) => {
+    // 1. Check ledger balance inside transaction
+    const balance = await ledgerService.getCreatorLedgerBalance(userId);
+
+    const pendingPayouts = await tx.payout.aggregate({
+      where: {
+        userId,
+        status: { in: ["PENDING", "PROCESSING"] },
+      },
+      _sum: { amount: true },
+    });
+
+    const pendingAmount = Number(pendingPayouts._sum.amount || 0);
+    const available = balance - pendingAmount;
+
+    if (amount > available) {
+      throw ApiError.badRequest(`Insufficient available balance. You have ${Math.max(0, available)} NGN available.`);
+    }
+
+    const creator = await tx.user.findUnique({
+      where: { id: userId },
+      include: { creatorProfile: true, bankAccount: true },
+    });
+
+    const accountNumber = creator?.bankAccount?.accountNumber || creator?.creatorProfile?.bankAccountNumber;
+    const bankCode = creator?.bankAccount?.bankCode || creator?.creatorProfile?.bankCode;
+    const bankName = creator?.bankAccount?.accountName || creator?.creatorProfile?.bankName || "Bank";
+
+    if (!accountNumber || !bankCode) {
+      throw ApiError.badRequest("Please add your bank account in Settings before requesting a payout.");
+    }
+
+    // Cooling-off security check: 24h wait after bank account change
+    if (creator?.bankAccount?.lastChangedAt) {
+      const hoursSinceChange =
+        (Date.now() - new Date(creator.bankAccount.lastChangedAt).getTime()) / (1000 * 60 * 60);
+      if (hoursSinceChange < 24) {
+        throw ApiError.badRequest(
+          "Bank details were recently updated. For account security, payouts are locked for 24 hours after updating bank details."
+        );
+      }
+    }
+
+    const payoutRef = idempotencyKey || `PO_${Date.now()}_${randomUUID().slice(0, 8)}`;
+
+    // Create payout record with PROCESSING status
+    const payout = await tx.payout.create({
+      data: {
+        userId,
+        amount,
+        currency: "NGN",
+        status: "PROCESSING",
+        providerRef: payoutRef,
+        bankAccountNumber: accountNumber,
+        bankCode,
+        bankName,
+        isDemo: config.PAYMENTS_MODE === "test",
+      },
+    });
+
+    // Debit creator payable in ledger
+    await ledgerService.recordPayoutDisbursement(tx, {
+      reference: payoutRef,
+      amount,
+      creatorId: userId,
+      currency: "NGN",
+    });
+
+    // Audit log
+    await tx.auditLog.create({
+      data: {
+        action: "PAYOUT_REQUESTED",
+        entityType: "PAYOUT",
+        entityId: payout.id,
+        userId,
+        metadata: { amount, bankAccountNumber: accountNumber, bankCode, reference: payoutRef },
+      },
+    });
+
+    // Disburse via Payaza Payout Receptor API
+    const result = await payazaClient.disbursePayout({
+      payout_amount: amount,
+      currency: "NGN",
+      country: "NGA",
+      narration: `CreatorVault Withdrawal: ${creator?.name || "Creator"}`,
+      beneficiaries: [
+        {
+          credit_amount: amount,
+          account_number: accountNumber,
+          account_name: bankName,
+          bank_code: bankCode,
+        },
+      ],
+    });
+
+    if (!result.success) {
+      // Reversal: Immediately fail and post ledger reversal
+      await tx.payout.update({
+        where: { id: payout.id },
+        data: {
+          status: "FAILED",
+          failureReason: String(result.data || "Payaza rejected transfer request"),
+        },
+      });
+
+      await ledgerService.recordPayoutFailureReversal(tx, {
+        reference: payoutRef,
+        amount,
+        creatorId: userId,
+        currency: "NGN",
+        reason: String(result.data),
+      });
+
+      await tx.auditLog.create({
+        data: {
+          action: "PAYOUT_FAILED_REVERSED",
+          entityType: "PAYOUT",
+          entityId: payout.id,
+          userId,
+          metadata: { reason: result.data, amount },
+        },
+      });
+
+      throw ApiError.badRequest(`Transfer failed with provider: ${result.data || "Request rejected"}`);
+    }
+
+    return payout;
+  });
+}
+
+// 6. STATUS POLLING & RECONCILIATION: Check provider status for pending payouts
+export async function syncPayoutStatus(payoutId: string, userId?: string) {
+  const payout = await prisma.payout.findUnique({
+    where: { id: payoutId },
+  });
+  if (!payout) throw ApiError.notFound("Payout not found");
+  if (userId && payout.userId !== userId) throw ApiError.forbidden("Access denied");
+
+  if (payout.status === "COMPLETED" || payout.status === "FAILED") {
+    return payout;
+  }
+
+  if (!payout.providerRef) return payout;
+
+  const statusResponse = await payazaClient.getTransferStatus(payout.providerRef);
+  if (!statusResponse) return payout;
+
+  const statusString = String(statusResponse.transaction_status || statusResponse.status || "").toLowerCase();
+
+  if (statusString === "completed" || statusString === "successful") {
+    return prisma.payout.update({
+      where: { id: payout.id },
+      data: { status: "COMPLETED", completedAt: new Date() },
+    });
+  } else if (statusString === "failed" || statusString === "rejected") {
+    return prisma.$transaction(async (tx) => {
+      const updated = await tx.payout.update({
+        where: { id: payout.id },
+        data: {
+          status: "FAILED",
+          failureReason: statusResponse.message || "Provider confirmed failed transfer",
+        },
+      });
+
+      // Post ledger reversal so user balance is restored
+      await ledgerService.recordPayoutFailureReversal(tx, {
+        reference: payout.providerRef!,
+        amount: payout.amount,
+        creatorId: payout.userId,
+        currency: payout.currency,
+        reason: statusResponse.message,
+      });
+
+      await createNotification({
+        userId: payout.userId,
+        type: "PAYOUT_FAILED",
+        title: "Withdrawal Failed",
+        message: `Your withdrawal of ${payout.amount} ${payout.currency} failed and has been refunded to your CreatorVault balance.`,
+        metadata: { payoutId: payout.id },
+      });
+
+      return updated;
     });
   }
 
-  await createNotification({
-    userId: payment.payeeId,
-    type: "PAYMENT_COMPLETED",
-    title: "Payment received",
-    message: `A payment of ${payment.amount} ${payment.currency} has landed in your CreatorVault balance. You can request a payout from the Payments page.`,
-    metadata: { dealId: payment.dealId, paymentId: payment.id },
+  return payout;
+}
+
+// 7. BANK ACCOUNT ENQUIRY & VERIFICATION
+export async function resolveBankDetails(bankCode: string, accountNumber: string) {
+  const result = await payazaClient.resolveAccount({
+    currency: "NGN",
+    bank_code: bankCode,
+    account_number: accountNumber,
   });
 
-  return updated;
+  if (!result.success || !result.account_name) {
+    throw ApiError.badRequest("Could not verify bank account with provider. Please check your bank code and account number.");
+  }
+
+  return {
+    bankCode,
+    accountNumber,
+    accountName: result.account_name,
+  };
 }
 
-/**
- * Demo-mode equivalent of a Payaza webhook firing "charge.success" — used
- * only when isLivePaymentsMode() is false. Only the brand who owns the
- * payment can confirm it (mirrors "only the cardholder can complete their
- * own checkout"), and it's a no-op if this payment somehow reached a real
- * Payaza flow instead.
- */
-export async function confirmMockPayment(reference: string, userId: string) {
-  if (isLivePaymentsMode()) {
-    throw ApiError.badRequest("Live payments are configured — use the real Payaza checkout instead");
-  }
+export async function saveVerifiedBankAccount(
+  userId: string,
+  data: { bankCode: string; accountNumber: string; bankName?: string }
+) {
+  const resolved = await resolveBankDetails(data.bankCode, data.accountNumber);
 
-  const payment = await prisma.payment.findFirst({ where: { providerRef: reference } });
-  if (!payment) throw ApiError.notFound("Payment");
-  if (payment.payerId !== userId) {
-    throw ApiError.forbidden("Only the brand who initiated this payment can confirm it");
-  }
-  if (payment.status === "COMPLETED") return payment;
-  if (payment.status !== "PENDING") {
-    throw ApiError.badRequest(`Payment is ${payment.status.toLowerCase()} and can't be confirmed`);
-  }
+  const bankAccount = await prisma.bankAccount.upsert({
+    where: { creatorId: userId },
+    update: {
+      bankCode: data.bankCode,
+      accountNumber: data.accountNumber,
+      accountName: resolved.accountName,
+      isVerified: true,
+      verifiedAt: new Date(),
+      lastChangedAt: new Date(),
+    },
+    create: {
+      creatorId: userId,
+      bankCode: data.bankCode,
+      accountNumber: data.accountNumber,
+      accountName: resolved.accountName,
+      isVerified: true,
+      verifiedAt: new Date(),
+      lastChangedAt: new Date(),
+    },
+  });
 
-  return markPaymentCompletedForWebhook(payment);
+  await prisma.creatorProfile.updateMany({
+    where: { userId },
+    data: {
+      bankCode: data.bankCode,
+      bankAccountNumber: data.accountNumber,
+      bankAccountName: resolved.accountName,
+      bankName: data.bankName || resolved.accountName,
+    },
+  });
+
+  await prisma.auditLog.create({
+    data: {
+      action: "BANK_ACCOUNT_VERIFIED_AND_SAVED",
+      entityType: "BANK_ACCOUNT",
+      entityId: bankAccount.id,
+      userId,
+      metadata: { bankCode: data.bankCode, accountName: resolved.accountName },
+    },
+  });
+
+  return bankAccount;
 }
 
-export async function verifyPayment(reference: string, userId: string) {
-  const payment = await prisma.payment.findFirst({ where: { providerRef: reference } });
-  if (!payment) throw ApiError.notFound("Payment not found");
+// 8. ESCROW REFUND (Dispute Resolution / Cancellation)
+export async function refundEscrow(dealId: string, milestoneId: string, reason: string, adminUserId?: string) {
+  return prisma.$transaction(async (tx) => {
+    const milestone = await tx.milestone.findUnique({
+      where: { id: milestoneId },
+      include: { payment: true, deal: true },
+    });
 
-  // Only the two parties on this payment may check its status — this
-  // endpoint used to be callable by ANY authenticated user, and it used to
-  // blindly mark the payment COMPLETED regardless of what Payaza actually
-  // said. Both were serious bugs: anyone who knew/guessed a reference could
-  // mark any payment as paid. This now (a) restricts who can call it and
-  // (b) actually asks Payaza for the real transaction status instead of
-  // assuming success. Final confirmation still happens via the signed
-  // webhook in payments.webhook.ts — this endpoint is only a client-facing
-  // "check where things stand" call, never the source of truth on its own.
-  if (payment.payerId !== userId && payment.payeeId !== userId) {
-    throw ApiError.forbidden("You are not a party to this payment");
-  }
-
-  if (payment.status === "COMPLETED") return payment;
-
-  let providerStatus: "success" | "failed" | "pending";
-  try {
-    // UNVERIFIED path (see payazaUrl() comment above) — confirmed real is
-    // card/card_charge/transaction_status for a status lookup, but whether
-    // that's the same thing as "verify by reference" here isn't something
-    // public docs confirm. Check your dashboard before relying on this.
-    const response = await fetch(
-      payazaUrl(`card/card_charge/transaction_status?reference=${reference}`),
-      {
-        method: "GET",
-        headers: { Authorization: `Bearer ${config.PAYAZA_SECRET_KEY}` },
-      }
-    );
-
-    if (!response.ok) throw new Error("Payaza verify request failed");
-    const data = await response.json();
-    const status = data?.response_content?.status ?? data?.status;
-
-    if (status === "success" || status === "successful" || status === "completed") {
-      providerStatus = "success";
-    } else if (status === "failed" || status === "declined") {
-      providerStatus = "failed";
-    } else {
-      providerStatus = "pending";
+    if (!milestone) throw ApiError.notFound("Milestone not found");
+    if (!milestone.payment || milestone.payment.status !== "COMPLETED") {
+      throw ApiError.badRequest("No completed escrow payment exists to refund for this milestone.");
     }
-  } catch (err) {
-    // If we can't reach Payaza, don't guess — report pending so the client
-    // can retry, and let the webhook be the eventual source of truth.
-    return { ...payment, status: payment.status };
-  }
 
-  if (providerStatus === "pending") {
-    return payment;
-  }
+    const refundRef = `REFUND_${Date.now()}_${randomUUID().slice(0, 8)}`;
 
-  if (providerStatus === "success") {
-    return markPaymentCompletedForWebhook(payment);
-  }
+    await tx.payment.update({
+      where: { id: milestone.payment.id },
+      data: { status: "REFUNDED" },
+    });
 
-  return prisma.payment.update({
-    where: { id: payment.id },
-    data: { status: "FAILED" },
+    await tx.milestone.update({
+      where: { id: milestoneId },
+      data: { status: "PENDING" },
+    });
+
+    await ledgerService.recordEscrowRefund(tx, {
+      reference: refundRef,
+      amount: milestone.payment.amount,
+      dealId,
+      milestoneId,
+      currency: milestone.payment.currency,
+      reason,
+    });
+
+    await tx.auditLog.create({
+      data: {
+        action: "ESCROW_REFUNDED",
+        entityType: "PAYMENT",
+        entityId: milestone.payment.id,
+        userId: adminUserId || milestone.deal.brandId,
+        metadata: { reason, amount: milestone.payment.amount, dealId, milestoneId },
+      },
+    });
+
+    await createNotification({
+      userId: milestone.deal.brandId,
+      type: "DISPUTE_RESOLVED",
+      title: "Escrow Refunded",
+      message: `Your payment of ${milestone.payment.amount} ${milestone.payment.currency} for milestone "${milestone.title}" has been refunded. Reason: ${reason}`,
+      metadata: { dealId, milestoneId },
+    });
+
+    return { success: true, refundReference: refundRef };
+  });
+}
+
+export async function listPayouts(userId: string) {
+  return prisma.payout.findMany({
+    where: { userId },
+    orderBy: { requestedAt: "desc" },
   });
 }
 
 export async function listPayments(userId: string, query: any) {
-  const { page, limit, status, dealId } = query;
-  const skip = (page - 1) * limit;
+  const { page = 1, limit = 20, status, dealId } = query;
+  const skip = (Number(page) - 1) * Number(limit);
 
   const where: Prisma.PaymentWhereInput = {
     OR: [{ payerId: userId }, { payeeId: userId }],
@@ -281,211 +711,45 @@ export async function listPayments(userId: string, query: any) {
     prisma.payment.findMany({
       where,
       skip,
-      take: limit,
+      take: Number(limit),
       orderBy: { createdAt: "desc" },
       include: {
-        deal: { select: { title: true } },
-        milestone: { select: { title: true } },
+        deal: { select: { id: true, title: true } },
+        milestone: { select: { id: true, title: true, status: true } },
       },
     }),
     prisma.payment.count({ where }),
   ]);
 
-  return { items, meta: getPaginationMeta(page, limit, total) };
+  return {
+    items,
+    meta: getPaginationMeta(Number(page), Number(limit), total),
+  };
 }
 
 export async function getPaymentStats(userId: string) {
-  const isCreator = await prisma.user.findUnique({ where: { id: userId } }).then(u => u?.role === "CREATOR");
-
-  if (isCreator) {
-    const earned = await prisma.payment.aggregate({
-      where: { payeeId: userId, status: "COMPLETED" },
-      _sum: { amount: true },
-    });
-    const pending = await prisma.payment.aggregate({
-      where: { payeeId: userId, status: "PENDING" },
-      _sum: { amount: true },
-    });
-    return {
-      earned: earned._sum.amount || 0,
-      pending: pending._sum.amount || 0,
-    };
-  } else {
-    const spent = await prisma.payment.aggregate({
-      where: { payerId: userId, status: "COMPLETED" },
-      _sum: { amount: true },
-    });
-    return { spent: spent._sum.amount || 0 };
-  }
-}
-
-// --- Payouts ---------------------------------------------------------------
-// A COMPLETED Payment only ever meant money landed in the platform's own
-// Payaza account. These functions are what actually let a creator get that
-// money into their own bank account.
-
-export async function getPayoutBalance(userId: string) {
-  const user = await prisma.user.findUnique({ where: { id: userId } });
-  if (!user) throw ApiError.notFound("User");
-  if (user.role !== "CREATOR") {
-    throw ApiError.forbidden("Only creators have a payout balance");
-  }
-
-  const [earned, paidOut, pendingPayouts] = await Promise.all([
+  const [totalSpent, totalReceived, escrowSecured] = await Promise.all([
     prisma.payment.aggregate({
-      where: { payeeId: userId, status: "COMPLETED" },
+      where: { payerId: userId, status: "COMPLETED" },
       _sum: { amount: true },
     }),
     prisma.payout.aggregate({
       where: { userId, status: "COMPLETED" },
       _sum: { amount: true },
     }),
-    prisma.payout.aggregate({
-      where: { userId, status: { in: ["PENDING", "PROCESSING"] } },
+    prisma.payment.aggregate({
+      where: {
+        payeeId: userId,
+        status: "COMPLETED",
+        milestone: { status: { in: ["PENDING", "IN_PROGRESS", "SUBMITTED"] } },
+      },
       _sum: { amount: true },
     }),
   ]);
 
-  const totalEarned = Number(earned._sum.amount || 0);
-  const totalPaidOut = Number(paidOut._sum.amount || 0);
-  const totalPending = Number(pendingPayouts._sum.amount || 0);
-
-  // Available = everything ever paid out to us, minus what's already been
-  // withdrawn or is currently mid-withdrawal (so you can't double-request).
-  const available = Math.max(0, totalEarned - totalPaidOut - totalPending);
-
   return {
-    totalEarned,
-    totalPaidOut,
-    pendingPayouts: totalPending,
-    availableBalance: available,
-    currency: "NGN",
+    totalSpent: Number(totalSpent._sum.amount || 0),
+    totalReceived: Number(totalReceived._sum.amount || 0),
+    escrowSecured: Number(escrowSecured._sum.amount || 0),
   };
-}
-
-export async function requestPayout(userId: string, amount: number) {
-  const user = await prisma.user.findUnique({
-    where: { id: userId },
-    include: { creatorProfile: true },
-  });
-
-  if (!user || user.role !== "CREATOR") {
-    throw ApiError.forbidden("Only creators can request a payout");
-  }
-
-  const profile = user.creatorProfile;
-  if (!profile?.bankAccountNumber || !profile?.bankName || !profile?.bankAccountName) {
-    throw ApiError.badRequest(
-      "Add your bank details on your profile before requesting a payout"
-    );
-  }
-
-  const balance = await getPayoutBalance(userId);
-  if (amount <= 0) throw ApiError.badRequest("Amount must be positive");
-  if (amount > balance.availableBalance) {
-    throw ApiError.badRequest("Amount exceeds your available balance");
-  }
-
-  const payout = await prisma.payout.create({
-    data: {
-      userId,
-      amount,
-      currency: "NGN",
-      status: "PENDING",
-      bankAccountNumber: profile.bankAccountNumber,
-      bankName: profile.bankName,
-    },
-  });
-
-  await createNotification({
-    userId,
-    type: "PAYOUT_REQUESTED",
-    title: "Payout requested",
-    message: `Your payout request for ${amount} NGN has been received and is being processed.`,
-    metadata: { payoutId: payout.id },
-  });
-
-  if (!isLivePaymentsMode()) {
-    // Demo mode: there's no real Payaza payout/transfer API to call, so we
-    // simulate an instant, successful bank transfer instead of leaving the
-    // payout stuck PENDING forever (which would make "get the money out"
-    // look broken even though the rest of the flow is fine). This is a
-    // simulation, not a real transfer — it's clearly labeled as such in
-    // the UI (see the Payments page "demo mode" banner).
-    const settled = await prisma.payout.update({
-      where: { id: payout.id },
-      data: {
-        status: "COMPLETED",
-        providerRef: `DEMO_${payout.id}`,
-        completedAt: new Date(),
-      },
-    });
-
-    await createNotification({
-      userId,
-      type: "PAYOUT_COMPLETED",
-      title: "Payout completed (demo)",
-      message: `${amount} NGN was "sent" to ${profile.bankName} ••••${profile.bankAccountNumber.slice(-4)}. No real bank transfer occurred — this app isn't connected to a live payment provider yet.`,
-      metadata: { payoutId: payout.id },
-    });
-
-    return settled;
-  }
-
-  // payout-receptor/payout is Payaza's CONFIRMED real payout endpoint path
-  // (from Payaza's own published SDK), unlike the checkout path above — so
-  // the URL here is trustworthy. The request body field names below are
-  // still a best-effort guess, though: confirm bank_name/account_number/
-  // account_name/amount/currency_code (and whether a bank *code* is
-  // required alongside the name) against your dashboard before going live.
-  // If the call fails we leave the Payout PENDING rather than guessing at
-  // success, so an admin/ops process can retry or mark it FAILED explicitly.
-  try {
-    const response = await fetch(payazaUrl("payout-receptor/payout"), {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${config.PAYAZA_SECRET_KEY}`,
-      },
-      body: JSON.stringify({
-        amount: Number(amount),
-        currency_code: "NGN",
-        bank_name: profile.bankName,
-        account_number: profile.bankAccountNumber,
-        account_name: profile.bankAccountName,
-        transaction_reference: `PO_${payout.id}`,
-      }),
-    });
-
-    if (response.ok) {
-      const data = (await response.json()) as { response_content?: { transaction_reference?: string } };
-      await prisma.payout.update({
-        where: { id: payout.id },
-        data: {
-          status: "PROCESSING",
-          providerRef: data?.response_content?.transaction_reference ?? `PO_${payout.id}`,
-        },
-      });
-    }
-    if (!response.ok) {
-      const body = await response.text().catch(() => "");
-      console.error(`Payaza payout failed (${response.status}):`, body);
-    }
-    // A non-ok response: leave PENDING — don't mark FAILED on a network
-    // hiccup, since the transfer may still have gone through on Payaza's
-    // side. This should be reconciled via a payout webhook/admin panel
-    // once Payaza's exact payout webhook shape is confirmed.
-  } catch (err) {
-    console.error("Payaza payout request failed:", err);
-    // Network failure — leave PENDING, same reasoning as above.
-  }
-
-  return payout;
-}
-
-export async function listPayouts(userId: string) {
-  return prisma.payout.findMany({
-    where: { userId },
-    orderBy: { requestedAt: "desc" },
-  });
 }

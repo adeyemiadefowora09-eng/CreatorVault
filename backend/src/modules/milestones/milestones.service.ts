@@ -3,6 +3,7 @@ import { ApiError } from "../../utils/apiError.js";
 import { CreateMilestoneInput, SubmitMilestoneInput, UpdateMilestoneInput } from "./milestones.validation.js";
 import { applyTrustScoreEvent } from "../trust-score/trustScore.instance.js";
 import { createNotification } from "../notifications/notifications.service.js";
+import { releaseEscrowPayout } from "../payments/payments.service.js";
 
 async function verifyDealParty(dealId: string, userId: string) {
   const deal = await prisma.deal.findUnique({ where: { id: dealId } });
@@ -148,9 +149,12 @@ export async function approveMilestone(milestoneId: string, userId: string) {
   if (milestone.deal.brandId !== userId) throw ApiError.forbidden("Only the brand can approve milestones");
   if (milestone.status !== "SUBMITTED") throw ApiError.badRequest("Only SUBMITTED milestones can be approved");
 
-  const updated = await prisma.milestone.update({
+  // Trigger Escrow Release (Disburses to creator or queues in balance, deducting 100 NGN fee)
+  await releaseEscrowPayout(milestoneId);
+
+  const updated = await prisma.milestone.findUniqueOrThrow({
     where: { id: milestoneId },
-    data: { status: "APPROVED" },
+    include: { payment: true },
   });
 
   if (new Date() <= milestone.dueDate) {
@@ -160,14 +164,6 @@ export async function approveMilestone(milestoneId: string, userId: string) {
       sourceId: milestone.id,
     });
   }
-
-  await createNotification({
-    userId: milestone.deal.creatorId,
-    type: "MILESTONE_APPROVED",
-    title: "Milestone approved",
-    message: `"${milestone.title}" was approved. Payment can now be initiated.`,
-    metadata: { dealId: milestone.dealId, milestoneId: milestone.id },
-  });
 
   return updated;
 }

@@ -41,6 +41,12 @@ export interface Milestone {
   submissionNote: string | null;
   submissionUrl: string | null;
   submittedAt: string | null;
+  payment?: {
+    id: string;
+    status: "PENDING" | "PROCESSING" | "COMPLETED" | "FAILED" | "REFUNDED";
+    amount: string | number;
+    paidAt: string | null;
+  } | null;
 }
 
 export interface Deal {
