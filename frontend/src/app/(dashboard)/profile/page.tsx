@@ -88,7 +88,7 @@ function GeneralProfileForm({
 }
 
 function CreatorProfileForm({ defaults }: { defaults: UpdateCreatorProfileInput }) {
-  const { register, handleSubmit, formState: { isDirty } } = useForm<{
+  const { register, handleSubmit, formState: { isDirty, errors } } = useForm<{
     categories: string;
     portfolioUrl?: string;
     bankAccountName?: string;
@@ -161,7 +161,21 @@ function CreatorProfileForm({ defaults }: { defaults: UpdateCreatorProfileInput 
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-1.5">
                 <Label htmlFor="bankAccountNumber">Account number</Label>
-                <Input id="bankAccountNumber" placeholder="0123456789" {...register("bankAccountNumber")} />
+                <Input
+                  id="bankAccountNumber"
+                  placeholder="0123456789"
+                  inputMode="numeric"
+                  autoComplete="off"
+                  maxLength={10}
+                  aria-invalid={Boolean(errors.bankAccountNumber)}
+                  {...register("bankAccountNumber", {
+                    // Nigerian bank accounts (NUBAN) are exactly 10 digits. Empty is allowed (details are optional until a payout).
+                    validate: (v) => !v || /^\d{10}$/.test(v.trim()) || "Account number must be exactly 10 digits.",
+                  })}
+                />
+                {errors.bankAccountNumber && (
+                  <p role="alert" className="text-sm text-destructive">{errors.bankAccountNumber.message}</p>
+                )}
               </div>
               <div className="space-y-1.5">
                 <Label htmlFor="bankName">Bank name</Label>

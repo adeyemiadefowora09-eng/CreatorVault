@@ -19,7 +19,7 @@ import {
   useRejectMilestone,
   useSubmitMilestone,
 } from "@/hooks/useMilestones";
-import { useInitializePayment } from "@/hooks/usePayments";
+import { PayButton } from "@/components/payments";
 import { useAuthStore } from "@/stores/authStore";
 import type { CreateMilestoneInput, Milestone, MilestoneStatus } from "@/types/deals";
 
@@ -158,21 +158,10 @@ function MilestoneRow({ milestone, dealId, isBrand, isCreator }: {
   const [submitting, setSubmitting] = useState(false);
   const approveMilestone = useApproveMilestone(dealId);
   const deleteMilestone = useDeleteMilestone(dealId);
-  const initializePayment = useInitializePayment();
 
   const isEscrowFunded = milestone.payment?.status === "COMPLETED" || milestone.status === "IN_PROGRESS";
   const isApprovedOrPaid = milestone.status === "APPROVED" || milestone.status === "PAID";
 
-  const handlePay = () => {
-    initializePayment.mutate(
-      { dealId, milestoneId: milestone.id },
-      {
-        onSuccess: (result) => {
-          if (result.checkoutUrl) window.open(result.checkoutUrl, "_blank", "noopener");
-        },
-      }
-    );
-  };
 
   return (
     <div className="border-b border-border px-4 py-3 last:border-b-0">
@@ -228,15 +217,13 @@ function MilestoneRow({ milestone, dealId, isBrand, isCreator }: {
       <div className="mt-2 flex flex-wrap items-center gap-2">
         {/* BRAND ESCROW ACTIONS */}
         {isBrand && !isEscrowFunded && !isApprovedOrPaid && (
-          <Button
-            size="sm"
-            onClick={handlePay}
-            disabled={initializePayment.isPending}
+          <PayButton
+            dealId={dealId}
+            milestoneId={milestone.id}
+            label={`Fund Escrow (₦${Number(milestone.amount).toLocaleString()})`}
+            icon={<ShieldCheck className="mr-1.5 h-4 w-4" />}
             className="bg-emerald-600 text-white hover:bg-emerald-700"
-          >
-            <ShieldCheck className="mr-1.5 h-4 w-4" />
-            {initializePayment.isPending ? "Starting checkout…" : `Fund Escrow (₦${Number(milestone.amount).toLocaleString()})`}
-          </Button>
+          />
         )}
 
         {isBrand && milestone.status === "SUBMITTED" && (
@@ -283,11 +270,6 @@ function MilestoneRow({ milestone, dealId, isBrand, isCreator }: {
       )}
       {rejecting && (
         <RejectMilestoneForm dealId={dealId} milestoneId={milestone.id} onDone={() => setRejecting(false)} />
-      )}
-      {initializePayment.isError && (
-        <p className="mt-2 text-sm text-destructive">
-          Payaza couldn&apos;t be reached — check PAYAZA_API_KEY/PAYAZA_BASE_URL in backend/.env.
-        </p>
       )}
     </div>
   );

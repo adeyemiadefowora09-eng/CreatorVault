@@ -88,7 +88,10 @@ api.interceptors.response.use(
 
     const isUnauthorized = error.response?.status === 401;
     const alreadyRetried = originalRequest?._retry;
-    const isAuthEndpoint = originalRequest?.url?.includes("/auth/");
+    // Only the credential endpoints themselves must never trigger a refresh loop.
+    // (Previously ANY url containing "/auth/" was skipped, which also skipped GET /auth/me —
+    // so an expired access token broke profile/payout screens instead of silently refreshing.)
+    const isAuthEndpoint = /\/auth\/(login|register|refresh)(\/|\?|$)/.test(originalRequest?.url ?? "");
 
     if (!isUnauthorized || alreadyRetried || !originalRequest || isAuthEndpoint) {
       return Promise.reject(error);
