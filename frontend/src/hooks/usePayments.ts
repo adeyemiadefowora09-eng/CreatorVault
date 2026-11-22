@@ -1,127 +1,110 @@
-/**
- * src/hooks/usePayments.ts
- * React Query hooks wrapping the Payments API (backend/src/modules/payments).
- */
-
+/** src/hooks/usePayments.ts — React Query hooks for the escrow/ledger Payments API. */
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
-import type { Payment, PaymentStats, Payout, PayoutBalance } from "@/types/payments";
+import type { Bank, Payment, PaymentMode, PaymentStats, Payout, PayoutBalance, VirtualAccount } from "@/types/payments";
 
-interface ApiEnvelope<T> {
-  success: boolean;
-  message: string;
-  data: T;
-  meta?: { page: number; limit: number; total: number; totalPages: number };
-}
+interface ApiEnvelope<T> { success: boolean; message: string; data: T }
 
-/**
- * POST /payments/initialize — starts a payment for an approved milestone.
- * In live mode this returns a real Payaza checkoutUrl to send the brand
- * to; in demo mode (no PAYAZA_API_KEY configured on the backend) there's
- * no gateway to redirect to, so checkoutUrl is null and `mock: true` —
- * the UI should show an in-app "confirm payment" step instead (see
- * useConfirmMockPayment below).
- */
-export function useInitializePayment() {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: async (input: { dealId: string; milestoneId: string }) => {
-      const { data } = await api.post<
-        ApiEnvelope<{ payment: Payment; checkoutUrl: string | null; mock?: boolean; reference?: string }>
-      >("/payments/initialize", input);
-      return data.data;
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["payments"] });
-    },
-  });
-}
-
-/** GET /payments/mode — whether the backend has real Payaza credentials configured. */
+/** GET /payments/mode — disabled | sandbox | live. */
 export function usePaymentMode() {
   return useQuery({
     queryKey: ["payments", "mode"],
-    queryFn: async () => {
-      const { data } = await api.get<ApiEnvelope<{ live: boolean }>>("/payments/mode");
-      return data.data;
-    },
-    staleTime: Infinity,
+    queryFn: async () => (await api.get<ApiEnvelope<PaymentMode>>("/payments/mode")).data.data,
+    staleTime: 60_000,
   });
 }
 
-/**
- * POST /payments/mock/:reference/confirm — demo-mode-only. Simulates the
- * brand's checkout succeeding, which is what a real Payaza webhook would
- * otherwise report. Only callable when usePaymentMode() says `live: false`.
- */
-export function useConfirmMockPayment() {
-  const queryClient = useQueryClient();
+/** POST /payments/initialize — brand funds a milestone escrow by bank transfer to a one-time virtual account. */
+export function useInitializePayment() {
+  const qc = useQueryClient();
   return useMutation({
-    mutationFn: async (reference: string) => {
-      const { data } = await api.post<ApiEnvelope<Payment>>(`/payments/mock/${reference}/confirm`);
-      return data.data;
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["payments"] });
-      queryClient.invalidateQueries({ queryKey: ["deals"] });
-    },
+    mutationFn: async (input: { dealId: string; milestoneId: string }) =>
+      (await api.post<ApiEnvelope<{ payment: Payment; virtualAccount: VirtualAccount | null; reference: string; sandbox: boolean }>>("/payments/initialize", input)).data.data,
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ["payments"] }); qc.invalidateQueries({ queryKey: ["milestones"] }); },
   });
 }
 
-/** GET /payments — the signed-in user's payments (as payer or payee). */
+/** POST /payments/verify/:reference — asks the backend to re-check with Payaza. Never trusts the browser. */
+export function useVerifyPayment() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (reference: string) => (await api.post<ApiEnvelope<Payment>>(`/payments/verify/${reference}`)).data.data,
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ["payments"] }); qc.invalidateQueries({ queryKey: ["milestones"] }); qc.invalidateQueries({ queryKey: ["deals"] }); },
+  });
+}
+
+/** SANDBOX ONLY — asks Payaza to simulate the bank transfer (a real webhook follows). */
+export function useSimulateSandboxPayment() {
+  return useMutation({
+    mutationFn: async (reference: string) => (await api.post(`/payments/sandbox/${reference}/simulate`)).data,
+  });
+}
+
 export function usePayments() {
   return useQuery({
     queryKey: ["payments", "list"],
-    queryFn: async () => {
-      const { data } = await api.get<ApiEnvelope<Payment[]>>("/payments");
-      return data.data;
-    },
+    queryFn: async () => (await api.get<ApiEnvelope<Payment[]>>("/payments")).data.data,
+    refetchInterval: 15_000,
   });
 }
 
-/** GET /payments/stats — earned/pending (creators) or spent (brands). */
 export function usePaymentStats() {
   return useQuery({
     queryKey: ["payments", "stats"],
-    queryFn: async () => {
-      const { data } = await api.get<ApiEnvelope<PaymentStats>>("/payments/stats");
-      return data.data;
-    },
+    queryFn: async () => (await api.get<ApiEnvelope<PaymentStats>>("/payments/stats")).data.data,
   });
 }
 
-/** GET /payments/payouts/balance — a creator's withdrawable balance. */
 export function usePayoutBalance() {
   return useQuery({
     queryKey: ["payments", "payouts", "balance"],
-    queryFn: async () => {
-      const { data } = await api.get<ApiEnvelope<PayoutBalance>>("/payments/payouts/balance");
-      return data.data;
-    },
+    queryFn: async () => (await api.get<ApiEnvelope<PayoutBalance>>("/payments/payouts/balance")).data.data,
+    refetchInterval: 15_000,
   });
 }
 
-/** GET /payments/payouts — a creator's payout history. */
 export function usePayouts() {
   return useQuery({
     queryKey: ["payments", "payouts", "list"],
-    queryFn: async () => {
-      const { data } = await api.get<ApiEnvelope<Payout[]>>("/payments/payouts");
-      return data.data;
-    },
+    queryFn: async () => (await api.get<ApiEnvelope<Payout[]>>("/payments/payouts")).data.data,
+    refetchInterval: 15_000,
   });
 }
 
-/** POST /payments/payouts — request a withdrawal of the available balance. */
+/** POST /payments/payouts — sends an Idempotency-Key so a double-click / retry can never withdraw twice. */
 export function useRequestPayout() {
-  const queryClient = useQueryClient();
+  const qc = useQueryClient();
   return useMutation({
-    mutationFn: async (amount: number) => {
-      const { data } = await api.post<ApiEnvelope<Payout>>("/payments/payouts", { amount });
-      return data.data;
+    mutationFn: async (amount: string) => {
+      const key = typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID() : `k-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      return (await api.post<ApiEnvelope<Payout>>("/payments/payouts", { amount }, { headers: { "Idempotency-Key": key } })).data.data;
     },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["payments", "payouts"] });
-    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["payments"] }),
+  });
+}
+
+// ---- payout bank account (verified through Payaza name enquiry) ------------
+export function useBanks(enabled = true) {
+  return useQuery({
+    queryKey: ["payments", "banks"],
+    enabled,
+    staleTime: 6 * 3600_000,
+    queryFn: async () => (await api.get<ApiEnvelope<Bank[]>>("/payments/banks")).data.data,
+  });
+}
+
+export function useResolveBank() {
+  return useMutation({
+    mutationFn: async (input: { bankCode: string; accountNumber: string }) =>
+      (await api.post<ApiEnvelope<{ accountName: string }>>("/payments/bank/resolve", input)).data.data,
+  });
+}
+
+export function useSaveBank() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (input: { bankCode: string; accountNumber: string; confirmedAccountName: string }) =>
+      (await api.put<ApiEnvelope<{ withdrawalsAvailableAt: string }>>("/payments/bank", input)).data.data,
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ["profile"] }); qc.invalidateQueries({ queryKey: ["payments"] }); },
   });
 }

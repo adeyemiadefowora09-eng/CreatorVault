@@ -16,12 +16,17 @@ import contractsRoutes from "./modules/contracts/contracts.routes.js";
 import dealGuardianRoutes from "./modules/deal-guardian/dealGuardian.routes.js";
 import trustScoreRoutes from "./modules/trust-score/trustScore.routes.js";
 import paymentsRoutes from "./modules/payments/payments.routes.js";
+import { handleWebhook } from "./modules/payments/webhook.js";
 
 const app = express();
 
 app.use(helmet());
 app.use(cors({ origin: config.CORS_ORIGIN, credentials: true }));
 app.use(cookieParser());
+// Payaza webhook: RAW body (signature is over the exact bytes), mounted BEFORE express.json()
+// and BEFORE the global rate limiter so provider retries are never throttled.
+app.post("/api/v1/payments/webhook/payaza", express.raw({ type: "*/*", limit: "1mb" }), handleWebhook);
+
 app.use(express.json());
 app.use(defaultLimiter);
 

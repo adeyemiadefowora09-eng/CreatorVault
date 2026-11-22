@@ -41,6 +41,7 @@ export interface Milestone {
   submissionNote: string | null;
   submissionUrl: string | null;
   submittedAt: string | null;
+  escrowStatus?: "UNFUNDED" | "FUNDED" | "RELEASED" | "REFUNDED";
 }
 
 export interface Deal {

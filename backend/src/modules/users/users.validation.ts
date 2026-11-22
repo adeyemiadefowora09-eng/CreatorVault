@@ -11,10 +11,7 @@ export const updateCreatorProfileSchema = z.object({
   categories: z.array(z.string()).optional(),
   portfolioUrl: z.string().url().optional(),
   socialLinks: z.record(z.string()).optional(),
-  bankAccountName: z.string().min(2).optional(),
-  bankAccountNumber: z.string().min(6).max(20).optional(),
-  bankName: z.string().min(2).optional(),
-  bankCode: z.string().optional(),
+  // Bank details are NOT editable here any more: use PUT /payments/bank (Payaza name-enquiry verified).
 });
 
 export const updateBrandProfileSchema = z.object({

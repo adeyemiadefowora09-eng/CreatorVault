@@ -6,7 +6,7 @@ import { AlertCircle, CreditCard, Wallet } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { usePayments, usePaymentStats, usePayoutBalance, usePayouts, useRequestPayout, usePaymentMode } from "@/hooks/usePayments";
+import { useBanks, usePayments, usePaymentStats, usePayoutBalance, usePayouts, useRequestPayout, usePaymentMode, useResolveBank, useSaveBank } from "@/hooks/usePayments";
 import { useMe } from "@/hooks/useProfile";
 import { useAuthStore } from "@/stores/authStore";
 import type { Payment, PaymentStatus, Payout, PayoutStatus } from "@/types/payments";
@@ -22,6 +22,8 @@ const STATUS_STYLES: Record<PaymentStatus, string> = {
   COMPLETED: "bg-emerald-500/10 text-emerald-600",
   FAILED: "bg-rose-500/10 text-rose-600",
   REFUNDED: "bg-slate-500/10 text-slate-600",
+  EXPIRED: "bg-slate-500/10 text-slate-600",
+  REVIEW: "bg-rose-500/10 text-rose-600",
 };
 
 const PAYOUT_STATUS_STYLES: Record<PayoutStatus, string> = {
@@ -96,6 +98,64 @@ function PayoutRow({ payout }: { payout: Payout }) {
   );
 }
 
+function PayoutAccountCard() {
+  const { data: me } = useMe();
+  const { data: banks } = useBanks();
+  const resolve = useResolveBank();
+  const save = useSaveBank();
+  const [bankCode, setBankCode] = useState("");
+  const [accountNumber, setAccountNumber] = useState("");
+  const p = me?.creatorProfile;
+  const verified = Boolean(p?.bankAccountNumber && p?.bankName);
+  const resolved = resolve.data?.accountName;
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-base">Payout bank account</CardTitle>
+        <CardDescription>
+          We verify the account name with your bank before saving. After a change, withdrawals pause for a security period.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        {verified && (
+          <p className="text-sm text-foreground">
+            {p?.bankName} ••••{p?.bankAccountNumber?.slice(-4)} · {p?.bankAccountName}
+          </p>
+        )}
+        <div className="flex flex-wrap items-end gap-3">
+          <div className="space-y-1.5">
+            <label htmlFor="bank" className="text-xs text-muted-foreground">Bank</label>
+            <select id="bank" value={bankCode} onChange={(e) => { setBankCode(e.target.value); resolve.reset(); }} className="h-9 rounded-md border border-input bg-background px-2 text-sm">
+              <option value="">Select bank…</option>
+              {(banks ?? []).map((b) => <option key={b.code} value={b.code}>{b.name}</option>)}
+            </select>
+          </div>
+          <div className="space-y-1.5">
+            <label htmlFor="acct" className="text-xs text-muted-foreground">Account number</label>
+            <Input id="acct" inputMode="numeric" maxLength={10} value={accountNumber} onChange={(e) => { setAccountNumber(e.target.value.replace(/\D/g, "")); resolve.reset(); }} placeholder="0123456789" />
+          </div>
+          <Button size="sm" variant="secondary" disabled={!bankCode || accountNumber.length !== 10 || resolve.isPending} onClick={() => resolve.mutate({ bankCode, accountNumber })}>
+            {resolve.isPending ? "Verifying…" : "Verify account"}
+          </Button>
+        </div>
+        {resolve.isError && <p className="text-sm text-destructive">We couldn&apos;t verify that account. Check the bank and number.</p>}
+        {resolved && (
+          <div className="rounded-lg bg-muted/50 p-3 text-sm">
+            <p>Account name: <strong>{resolved}</strong></p>
+            <p className="text-xs text-muted-foreground">Only continue if this is your account.</p>
+            <Button size="sm" className="mt-2" disabled={save.isPending} onClick={() => save.mutate({ bankCode, accountNumber, confirmedAccountName: resolved }, { onSuccess: () => { resolve.reset(); setAccountNumber(""); } })}>
+              {save.isPending ? "Saving…" : "Yes, this is my account — save"}
+            </Button>
+          </div>
+        )}
+        {save.isSuccess && <p className="text-sm text-emerald-600">Saved. Withdrawals are paused briefly as a security measure.</p>}
+        {save.isError && <p className="text-sm text-destructive">Couldn&apos;t save — you may have a payout in progress, or the name didn&apos;t match.</p>}
+      </CardContent>
+    </Card>
+  );
+}
+
 function WithdrawCard() {
   const { data: me } = useMe();
   const { data: balance, isLoading } = usePayoutBalance();
@@ -105,6 +165,7 @@ function WithdrawCard() {
   const hasBankDetails = Boolean(
     me?.creatorProfile?.bankAccountNumber && me?.creatorProfile?.bankName
   );
+  const inEscrow = balance?.inEscrow ?? 0;
   const available = balance?.availableBalance ?? 0;
 
   return (
@@ -133,6 +194,12 @@ function WithdrawCard() {
             </p>
           </div>
           <div>
+            <p className="text-xs text-muted-foreground">In escrow (awaiting approval)</p>
+            <p className="mt-1 text-lg font-semibold text-foreground">
+              {isLoading ? "…" : formatAmount(inEscrow, "NGN")}
+            </p>
+          </div>
+          <div>
             <p className="text-xs text-muted-foreground">Total earned</p>
             <p className="mt-1 text-lg font-semibold text-foreground">
               {isLoading ? "…" : formatAmount(balance?.totalEarned ?? 0, "NGN")}
@@ -142,18 +209,16 @@ function WithdrawCard() {
 
         {!hasBankDetails ? (
           <p className="text-sm text-muted-foreground">
-            Add your bank details on your{" "}
-            <a href="/profile" className="underline underline-offset-2">
-              profile
-            </a>{" "}
-            before requesting a payout.
+            Verify your bank account in the{" "}
+            payout account card above
+            {" "}before requesting a payout.
           </p>
         ) : (
           <form
             onSubmit={(e) => {
               e.preventDefault();
               const value = Number(amount);
-              if (value > 0) requestPayout.mutate(value, { onSuccess: () => setAmount("") });
+              if (value > 0) requestPayout.mutate(amount.trim(), { onSuccess: () => setAmount("") });
             }}
             className="flex flex-wrap items-end gap-3"
           >
@@ -184,7 +249,7 @@ function WithdrawCard() {
 
         {requestPayout.isError && (
           <p className="text-sm text-destructive">
-            Couldn&apos;t request that payout — check the amount and try again.
+            Couldn&apos;t request that payout — check the amount, your verified bank account and the minimum withdrawal.
           </p>
         )}
         {requestPayout.isSuccess && (
@@ -211,18 +276,20 @@ export default function PaymentsPage() {
       <header>
         <h1 className="text-2xl font-semibold text-foreground">Payments</h1>
         <p className="mt-1 text-sm text-muted-foreground">
-          Milestone payouts and payment history for your deals.
+          Escrow funding, earnings and withdrawals for your deals.
         </p>
       </header>
 
-      {paymentMode && !paymentMode.live && (
+      {paymentMode && paymentMode.mode === "disabled" && (
+        <div className="flex items-start gap-2 rounded-lg bg-rose-500/10 p-3 text-sm text-rose-700 dark:text-rose-400">
+          <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+          <span>Payments are switched off on this server, so no money can be funded or withdrawn.</span>
+        </div>
+      )}
+      {paymentMode && paymentMode.mode === "sandbox" && (
         <div className="flex items-start gap-2 rounded-lg bg-amber-500/10 p-3 text-sm text-amber-700 dark:text-amber-400">
           <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
-          <span>
-            Demo mode: no live payment provider is connected, so payments and payouts here are
-            simulated — no real money moves, but the flow (escrow → confirm → balance → withdraw)
-            works the same way a live one would.
-          </span>
+          <span>Sandbox mode: this uses Payaza&apos;s test environment. No real money moves, and sandbox balances can never be withdrawn in live mode.</span>
         </div>
       )}
 
@@ -231,14 +298,18 @@ export default function PaymentsPage() {
           {isCreator ? (
             <>
               <StatCard label="Total earned" value={formatAmount(stats.earned ?? 0, "NGN")} />
-              <StatCard label="Pending" value={formatAmount(stats.pending ?? 0, "NGN")} />
+              <StatCard label="In escrow (awaiting approval)" value={formatAmount(stats.pending ?? 0, "NGN")} />
             </>
           ) : (
-            <StatCard label="Total spent" value={formatAmount(stats.spent ?? 0, "NGN")} />
+            <>
+              <StatCard label="Total funded" value={formatAmount(stats.spent ?? 0, "NGN")} />
+              <StatCard label="Held in escrow" value={formatAmount(stats.inEscrow ?? 0, "NGN")} />
+            </>
           )}
         </div>
       )}
 
+      {isCreator && <PayoutAccountCard />}
       {isCreator && <WithdrawCard />}
 
       {isLoading && (

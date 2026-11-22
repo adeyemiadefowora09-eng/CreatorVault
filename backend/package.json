@@ -13,8 +13,12 @@
     "db:studio": "prisma studio",
     "db:reset": "prisma migrate reset",
     "lint": "tsc --noEmit",
-    "test": "vitest run",
-    "test:watch": "vitest"
+    "test": "vitest run tests/unit",
+    "test:watch": "vitest",
+    "db:deploy": "prisma migrate deploy",
+    "test:unit": "vitest run tests/unit",
+    "test:integration": "vitest run tests/integration",
+    "create-admin": "tsx scripts/create-admin.ts"
   },
   "dependencies": {
     "@creatorvault/ai-engine": "file:../ai-engine",

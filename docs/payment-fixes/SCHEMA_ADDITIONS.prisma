@@ -1,0 +1,46 @@
+// Add these three model blocks to the BOTTOM of backend/prisma/schema.prisma
+// (before the closing brace — there is no closing brace in Prisma schema,
+//  just paste these at the end of the file)
+
+// ── Ledger ────────────────────────────────────────────────────────────────────
+
+model LedgerAccount {
+  id          String        @id
+  label       String
+  balanceKobo BigInt        @default(0) @map("balance_kobo")
+  createdAt   DateTime      @default(now()) @map("created_at")
+  debits      LedgerEntry[] @relation("LedgerDebit")
+  credits     LedgerEntry[] @relation("LedgerCredit")
+
+  @@map("ledger_accounts")
+}
+
+model LedgerEntry {
+  id              String        @id @default(uuid())
+  idempotencyKey  String        @unique @map("idempotency_key")
+  debitAccountId  String        @map("debit_account_id")
+  creditAccountId String        @map("credit_account_id")
+  amountKobo      BigInt        @map("amount_kobo")
+  currency        String        @default("NGN")
+  type            String
+  referenceId     String?       @map("reference_id")
+  description     String?
+  createdAt       DateTime      @default(now()) @map("created_at")
+  debitAccount    LedgerAccount @relation("LedgerDebit", fields: [debitAccountId], references: [id])
+  creditAccount   LedgerAccount @relation("LedgerCredit", fields: [creditAccountId], references: [id])
+
+  @@index([referenceId])
+  @@index([type])
+  @@index([createdAt(sort: Desc)])
+  @@map("ledger_entries")
+}
+
+model WebhookEvent {
+  id         String   @id @default(uuid())
+  eventKey   String   @unique @map("event_key")
+  payload    Json?
+  receivedAt DateTime @default(now()) @map("received_at")
+
+  @@index([receivedAt(sort: Desc)])
+  @@map("webhook_events")
+}

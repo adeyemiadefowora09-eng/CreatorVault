@@ -118,9 +118,6 @@ function CreatorProfileForm({ defaults }: { defaults: UpdateCreatorProfileInput 
         .map((c) => c.trim())
         .filter(Boolean),
       portfolioUrl: values.portfolioUrl || undefined,
-      bankAccountName: values.bankAccountName || undefined,
-      bankAccountNumber: values.bankAccountNumber || undefined,
-      bankName: values.bankName || undefined,
     });
   };
 
@@ -145,29 +142,15 @@ function CreatorProfileForm({ defaults }: { defaults: UpdateCreatorProfileInput 
             <Input id="portfolioUrl" placeholder="https://…" {...register("portfolioUrl")} />
           </div>
 
-          <div className="space-y-3 rounded-lg border border-border p-3">
-            <div>
-              <p className="text-sm font-medium text-foreground">Payout bank details</p>
-              <p className="text-xs text-muted-foreground">
-                {hasBankDetails
-                  ? "Where your milestone earnings are withdrawn to. Update anytime."
-                  : "Required before you can request a payout on the Payments page."}
-              </p>
-            </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="bankAccountName">Account name</Label>
-              <Input id="bankAccountName" placeholder="As it appears on your bank account" {...register("bankAccountName")} />
-            </div>
-            <div className="grid grid-cols-2 gap-3">
-              <div className="space-y-1.5">
-                <Label htmlFor="bankAccountNumber">Account number</Label>
-                <Input id="bankAccountNumber" placeholder="0123456789" {...register("bankAccountNumber")} />
-              </div>
-              <div className="space-y-1.5">
-                <Label htmlFor="bankName">Bank name</Label>
-                <Input id="bankName" placeholder="e.g. GTBank" {...register("bankName")} />
-              </div>
-            </div>
+          <div className="space-y-1 rounded-lg border border-border p-3">
+            <p className="text-sm font-medium text-foreground">Payout bank account</p>
+            <p className="text-xs text-muted-foreground">
+              {hasBankDetails
+                ? `${defaults.bankName} ••••${defaults.bankAccountNumber?.slice(-4)} (verified).`
+                : "Not set."}{" "}
+              Bank details are verified with your bank and managed on the{" "}
+              <a href="/payments" className="underline underline-offset-2">Payments page</a>.
+            </p>
           </div>
 
           <FormStatus

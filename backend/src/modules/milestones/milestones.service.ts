@@ -3,6 +3,8 @@ import { ApiError } from "../../utils/apiError.js";
 import { CreateMilestoneInput, SubmitMilestoneInput, UpdateMilestoneInput } from "./milestones.validation.js";
 import { applyTrustScoreEvent } from "../trust-score/trustScore.instance.js";
 import { createNotification } from "../notifications/notifications.service.js";
+import { config } from "../../config/env.js";
+import { releaseMilestoneEscrow } from "../payments/escrow.service.js";
 
 async function verifyDealParty(dealId: string, userId: string) {
   const deal = await prisma.deal.findUnique({ where: { id: dealId } });
@@ -63,9 +65,13 @@ export async function listMilestones(dealId: string, userId: string) {
     where: { dealId },
     orderBy: { orderIndex: "asc" },
     include: {
-      payment: { select: { id: true, status: true, amount: true, paidAt: true } },
+      payments: {
+        orderBy: { createdAt: "desc" },
+        take: 1,
+        select: { id: true, status: true, amount: true, paidAt: true, providerRef: true, expiresAt: true },
+      },
     },
-  });
+  }).then((rows) => rows.map(({ payments, ...m }) => ({ ...m, payment: payments[0] ?? null })));
 }
 
 export async function updateMilestone(
@@ -81,6 +87,10 @@ export async function updateMilestone(
   if (!milestone) throw ApiError.notFound("Milestone");
   if (milestone.deal.brandId !== userId) throw ApiError.forbidden("Only the brand can update milestones");
   if (milestone.status !== "PENDING") throw ApiError.badRequest("Can only update PENDING milestones");
+  if (milestone.escrowStatus !== "UNFUNDED") throw ApiError.badRequest("Funded milestones can't be edited");
+  if (await prisma.payment.findFirst({ where: { milestoneId, activeKey: milestoneId } })) {
+    throw ApiError.badRequest("This milestone has a payment in progress and can't be edited");
+  }
 
   return prisma.milestone.update({
     where: { id: milestoneId },
@@ -111,6 +121,10 @@ export async function submitMilestone(
 
   if (!milestone) throw ApiError.notFound("Milestone");
   if (milestone.deal.creatorId !== userId) throw ApiError.forbidden("Only the creator can submit milestones");
+
+  if (config.REQUIRE_FUNDED_ESCROW && milestone.escrowStatus !== "FUNDED") {
+    throw ApiError.badRequest("The brand must fund this milestone (escrow) before you can submit work for it");
+  }
 
   const submittable = ["PENDING", "IN_PROGRESS"];
   if (!submittable.includes(milestone.status)) {
@@ -148,10 +162,19 @@ export async function approveMilestone(milestoneId: string, userId: string) {
   if (milestone.deal.brandId !== userId) throw ApiError.forbidden("Only the brand can approve milestones");
   if (milestone.status !== "SUBMITTED") throw ApiError.badRequest("Only SUBMITTED milestones can be approved");
 
-  const updated = await prisma.milestone.update({
-    where: { id: milestoneId },
-    data: { status: "APPROVED" },
-  });
+  if (milestone.deal.status === "DISPUTED") {
+    throw ApiError.conflict("This deal is under dispute — milestones can't be approved until an admin resolves it");
+  }
+
+  let updated;
+  if (milestone.escrowStatus === "FUNDED") {
+    // Escrow release is atomic (ledger + milestone PAID in one DB transaction) and idempotent.
+    await releaseMilestoneEscrow(milestoneId, userId);
+    updated = await prisma.milestone.findUniqueOrThrow({ where: { id: milestoneId } });
+  } else {
+    // Legacy/unfunded: approval is recorded, money is released automatically once the brand funds it.
+    updated = await prisma.milestone.update({ where: { id: milestoneId }, data: { status: "APPROVED" } });
+  }
 
   if (new Date() <= milestone.dueDate) {
     await applyTrustScoreEvent({
@@ -165,7 +188,7 @@ export async function approveMilestone(milestoneId: string, userId: string) {
     userId: milestone.deal.creatorId,
     type: "MILESTONE_APPROVED",
     title: "Milestone approved",
-    message: `"${milestone.title}" was approved. Payment can now be initiated.`,
+    message: milestone.escrowStatus === "FUNDED" ? `"${milestone.title}" was approved and the escrowed payment has been released to your balance.` : `"${milestone.title}" was approved. Payment is released once the brand funds it.`,
     metadata: { dealId: milestone.dealId, milestoneId: milestone.id },
   });
 
@@ -216,6 +239,7 @@ export async function deleteMilestone(milestoneId: string, userId: string) {
   if (!milestone) throw ApiError.notFound("Milestone");
   if (milestone.deal.brandId !== userId) throw ApiError.forbidden("Only the brand can delete milestones");
   if (milestone.status !== "PENDING") throw ApiError.badRequest("Can only delete PENDING milestones");
+  if (milestone.escrowStatus !== "UNFUNDED") throw ApiError.badRequest("Funded milestones can't be deleted");
   if (milestone.deal.status !== "DRAFT") throw ApiError.badRequest("Can only delete milestones on DRAFT deals");
 
   await prisma.milestone.delete({ where: { id: milestoneId } });

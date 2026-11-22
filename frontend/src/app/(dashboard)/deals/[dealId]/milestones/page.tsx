@@ -19,7 +19,8 @@ import {
   useRejectMilestone,
   useSubmitMilestone,
 } from "@/hooks/useMilestones";
-import { useInitializePayment, usePayments, usePaymentMode, useConfirmMockPayment } from "@/hooks/usePayments";
+import { useInitializePayment, usePayments, usePaymentMode } from "@/hooks/usePayments";
+import { FundingPanel } from "@/components/payments/FundingPanel";
 import { useAuthStore } from "@/stores/authStore";
 import type { CreateMilestoneInput, Milestone, MilestoneStatus } from "@/types/deals";
 
@@ -159,23 +160,24 @@ function MilestoneRow({ milestone, dealId, isBrand, isCreator }: {
   const approveMilestone = useApproveMilestone(dealId);
   const deleteMilestone = useDeleteMilestone(dealId);
   const initializePayment = useInitializePayment();
-  const confirmMockPayment = useConfirmMockPayment();
   const { data: paymentMode } = usePaymentMode();
   const { data: payments } = usePayments();
 
-  // Demo mode has no real checkout to redirect to, so a payment sits
-  // PENDING (money "in transit to escrow") until the brand explicitly
-  // confirms it — this finds that in-flight payment for this milestone so
-  // the confirm step survives a page refresh, not just local state.
-  const pendingPayment = payments?.find(
-    (p) => p.milestoneId === milestone.id && p.status === "PENDING"
+  // The live (not expired/failed) escrow payment for this milestone, if any. The paying brand gets the
+  // virtual-account details back, so the transfer instructions survive a page refresh.
+  const activePayment = payments?.find(
+    (p) => p.milestoneId === milestone.id && ["PENDING", "COMPLETED", "REVIEW"].includes(p.status)
   );
+  const escrow = milestone.escrowStatus ?? "UNFUNDED";
+  const [justStarted, setJustStarted] = useState<typeof activePayment>(undefined);
+  const awaitingTransfer = activePayment?.status === "PENDING" ? activePayment : justStarted;
+  const canFund =
+    isBrand && escrow === "UNFUNDED" && !awaitingTransfer && milestone.status !== "PAID" &&
+    paymentMode?.enabled !== false;
 
-  const handlePay = () => {
+  const handleFund = () => {
     initializePayment.mutate({ dealId, milestoneId: milestone.id }, {
-      onSuccess: (result) => {
-        if (result.checkoutUrl) window.open(result.checkoutUrl, "_blank", "noopener");
-      },
+      onSuccess: (r) => setJustStarted({ ...r.payment, virtualAccount: r.virtualAccount } as typeof activePayment),
     });
   };
 
@@ -219,33 +221,25 @@ function MilestoneRow({ milestone, dealId, isBrand, isCreator }: {
         )}
 
       <div className="mt-2 flex flex-wrap gap-2">
-        {isCreator && (milestone.status === "PENDING" || milestone.status === "IN_PROGRESS") && !submitting && (
+        {escrow === "FUNDED" && (
+          <span className="inline-flex items-center rounded-full bg-emerald-500/10 px-2.5 py-1 text-xs font-medium text-emerald-600">
+            Funded — held in escrow
+          </span>
+        )}
+        {isCreator && escrow === "UNFUNDED" && milestone.status !== "PAID" && (
+          <span className="inline-flex items-center rounded-full bg-amber-500/10 px-2.5 py-1 text-xs font-medium text-amber-600">
+            {awaitingTransfer ? "Brand is funding this milestone" : "Waiting for the brand to fund escrow"}
+          </span>
+        )}
+        {isCreator && escrow === "FUNDED" && (milestone.status === "PENDING" || milestone.status === "IN_PROGRESS") && !submitting && (
           <Button size="sm" variant="secondary" onClick={() => setSubmitting(true)}>
             Submit for approval
           </Button>
         )}
-        {isBrand && milestone.status === "APPROVED" && !pendingPayment && (
-          <Button size="sm" onClick={handlePay} disabled={initializePayment.isPending}>
-            {initializePayment.isPending
-              ? "Starting payment…"
-              : paymentMode?.live
-                ? "Pay via Payaza"
-                : "Send to escrow"}
+        {canFund && (
+          <Button size="sm" onClick={handleFund} disabled={initializePayment.isPending}>
+            {initializePayment.isPending ? "Preparing bank details…" : "Fund escrow"}
           </Button>
-        )}
-        {isBrand && pendingPayment && (
-          <Button
-            size="sm"
-            onClick={() => confirmMockPayment.mutate(pendingPayment.providerRef!)}
-            disabled={confirmMockPayment.isPending}
-          >
-            {confirmMockPayment.isPending ? "Confirming…" : `Confirm payment of ${pendingPayment.currency} ${pendingPayment.amount}`}
-          </Button>
-        )}
-        {isCreator && pendingPayment && (
-          <span className="inline-flex items-center rounded-full bg-amber-500/10 px-2.5 py-1 text-xs font-medium text-amber-600">
-            Payment sent — awaiting brand confirmation
-          </span>
         )}
         {isBrand && milestone.status === "SUBMITTED" && (
           <>
@@ -271,14 +265,12 @@ function MilestoneRow({ milestone, dealId, isBrand, isCreator }: {
       {rejecting && (
         <RejectMilestoneForm dealId={dealId} milestoneId={milestone.id} onDone={() => setRejecting(false)} />
       )}
-      {initializePayment.isError && paymentMode?.live && (
-        <p className="mt-2 text-sm text-destructive">
-          Payaza couldn&apos;t be reached — check PAYAZA_API_KEY/PAYAZA_BASE_URL in backend/.env.
-        </p>
+      {isBrand && awaitingTransfer?.virtualAccount && (
+        <FundingPanel payment={awaitingTransfer} sandbox={Boolean(paymentMode?.sandbox)} />
       )}
-      {confirmMockPayment.isError && (
+      {initializePayment.isError && (
         <p className="mt-2 text-sm text-destructive">
-          Couldn&apos;t confirm that payment. Try again.
+          Couldn&apos;t start funding. The deal must be active and payments enabled; try again shortly.
         </p>
       )}
     </div>
@@ -304,13 +296,16 @@ export default function MilestonesPage({ params }: { params: Promise<{ dealId: s
         Back to deal
       </Link>
 
-      {paymentMode && !paymentMode.live && (
+      {paymentMode && paymentMode.mode === "sandbox" && (
         <div className="flex items-start gap-2 rounded-lg bg-amber-500/10 p-3 text-sm text-amber-700 dark:text-amber-400">
           <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
-          <span>
-            Demo mode: no live payment provider is configured, so payments and payouts here are
-            simulated (no real money moves) but otherwise behave the same way a real one would.
-          </span>
+          <span>Sandbox mode: funding uses Payaza&apos;s test environment. No real money moves.</span>
+        </div>
+      )}
+      {paymentMode && paymentMode.mode === "disabled" && (
+        <div className="flex items-start gap-2 rounded-lg bg-rose-500/10 p-3 text-sm text-rose-700 dark:text-rose-400">
+          <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+          <span>Payments are switched off on this server.</span>
         </div>
       )}
 

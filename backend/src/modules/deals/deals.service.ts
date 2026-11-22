@@ -1,3 +1,4 @@
+import { refundDealEscrow } from "../payments/escrow.service.js";
 import { Prisma } from "@prisma/client";
 import { prisma } from "../../config/db.js";
 import { ApiError } from "../../utils/apiError.js";
@@ -293,6 +294,9 @@ export async function cancelDeal(dealId: string, userId: string) {
     data: { status: "CANCELLED" },
     include: dealInclude,
   });
+
+  // Any money still held in escrow goes back to the brand's refundable balance (ledger-recorded).
+  await refundDealEscrow(dealId, userId, "Deal cancelled");
 
   const counterpartyId = userId === deal.brandId ? deal.creatorId : deal.brandId;
   await createNotification({
