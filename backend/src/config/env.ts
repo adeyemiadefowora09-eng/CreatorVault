@@ -22,10 +22,21 @@ const envSchema = z
 
     DATABASE_URL: z.string().url(),
 
+<<<<<<< HEAD
     JWT_SECRET: z.string().min(32),
     JWT_REFRESH_SECRET: z.string().min(32),
     JWT_EXPIRY: z.string().default("15m"),
     JWT_REFRESH_EXPIRY: z.string().default("7d"),
+=======
+  PAYAZA_API_KEY: z.string().default(""),
+  PAYAZA_PUBLIC_KEY: z.string().default(""),
+  PAYAZA_SECRET_KEY: z.string().default(""),
+  PAYAZA_BASE_URL: z.string().default("https://api.payaza.africa/live/"),
+  PAYAZA_TENANT: z.enum(["test", "live"]).default("test"),
+  PAYAZA_TRANSACTION_PIN: z.string().default(""),
+  PAYAZA_ACCOUNT_REFERENCE: z.string().default(""),
+  PAYMENTS_MODE: z.enum(["live", "sandbox", "test"]).default("sandbox"),
+>>>>>>> 9c15709e71866d0d287652bd5fa6ab5f84e07faf
 
     // ---- Payments -------------------------------------------------------
     // disabled = fail closed (default). sandbox = Payaza TEST tenant.

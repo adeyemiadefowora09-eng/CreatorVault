@@ -22,6 +22,7 @@ const app = express();
 
 app.use(helmet());
 app.use(cors({ origin: config.CORS_ORIGIN, credentials: true }));
+<<<<<<< HEAD
 app.use(cookieParser());
 // Payaza webhook: RAW body (signature is over the exact bytes), mounted BEFORE express.json()
 // and BEFORE the global rate limiter so provider retries are never throttled.
@@ -29,6 +30,23 @@ app.post("/api/v1/payments/webhook/payaza", express.raw({ type: "*/*", limit: "1
 
 app.use(express.json());
 app.use(defaultLimiter);
+=======
+app.use(
+  express.json({
+    verify: (req: any, _res, buf) => {
+      req.rawBody = buf;
+    },
+  })
+);
+
+// Exempt Payaza webhooks from default rate limiting to prevent dropping provider retries
+app.use((req, res, next) => {
+  if (req.path.startsWith("/api/v1/payments/webhook")) {
+    return next();
+  }
+  return defaultLimiter(req, res, next);
+});
+>>>>>>> 9c15709e71866d0d287652bd5fa6ab5f84e07faf
 
 // Health check
 app.get("/api/health", (req, res) => {

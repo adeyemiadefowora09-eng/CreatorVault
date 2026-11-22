@@ -1,1 +1,1 @@
-// Payment components (Timeline, PayButton) go here
+export { PayButton } from "./PayButton";

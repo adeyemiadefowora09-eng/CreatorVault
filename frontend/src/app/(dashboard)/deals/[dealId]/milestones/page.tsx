@@ -3,7 +3,7 @@
 import { use, useState } from "react";
 import Link from "next/link";
 import { useForm } from "react-hook-form";
-import { AlertCircle, ArrowLeft, ListChecks, Plus, Trash2 } from "lucide-react";
+import { AlertCircle, ArrowLeft, CheckCircle2, Clock, ListChecks, Plus, ShieldCheck, Trash2 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -19,8 +19,12 @@ import {
   useRejectMilestone,
   useSubmitMilestone,
 } from "@/hooks/useMilestones";
+<<<<<<< HEAD
 import { useInitializePayment, usePayments, usePaymentMode } from "@/hooks/usePayments";
 import { FundingPanel } from "@/components/payments/FundingPanel";
+=======
+import { PayButton } from "@/components/payments";
+>>>>>>> 9c15709e71866d0d287652bd5fa6ab5f84e07faf
 import { useAuthStore } from "@/stores/authStore";
 import type { CreateMilestoneInput, Milestone, MilestoneStatus } from "@/types/deals";
 
@@ -159,6 +163,7 @@ function MilestoneRow({ milestone, dealId, isBrand, isCreator }: {
   const [submitting, setSubmitting] = useState(false);
   const approveMilestone = useApproveMilestone(dealId);
   const deleteMilestone = useDeleteMilestone(dealId);
+<<<<<<< HEAD
   const initializePayment = useInitializePayment();
   const { data: paymentMode } = usePaymentMode();
   const { data: payments } = usePayments();
@@ -180,21 +185,39 @@ function MilestoneRow({ milestone, dealId, isBrand, isCreator }: {
       onSuccess: (r) => setJustStarted({ ...r.payment, virtualAccount: r.virtualAccount } as typeof activePayment),
     });
   };
+=======
+
+  const isEscrowFunded = milestone.payment?.status === "COMPLETED" || milestone.status === "IN_PROGRESS";
+  const isApprovedOrPaid = milestone.status === "APPROVED" || milestone.status === "PAID";
+
+>>>>>>> 9c15709e71866d0d287652bd5fa6ab5f84e07faf
 
   return (
     <div className="border-b border-border px-4 py-3 last:border-b-0">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
-          <p className="text-sm font-medium text-foreground">{milestone.title}</p>
+          <div className="flex items-center gap-2">
+            <p className="text-sm font-medium text-foreground">{milestone.title}</p>
+            {isEscrowFunded && !isApprovedOrPaid && (
+              <span className="inline-flex items-center gap-1 rounded-full bg-blue-500/10 px-2 py-0.5 text-[11px] font-medium text-blue-600">
+                <ShieldCheck className="h-3 w-3" />
+                Escrow Secured
+              </span>
+            )}
+          </div>
           {milestone.description && (
             <p className="text-sm text-muted-foreground">{milestone.description}</p>
           )}
           <p className="mt-1 text-xs text-muted-foreground">
-            Due {new Date(milestone.dueDate).toLocaleDateString()}
+            Due {new Date(milestone.dueDate).toLocaleDateString()} · ₦{Number(milestone.amount).toLocaleString()}
           </p>
         </div>
         <span className={`shrink-0 rounded-full px-2.5 py-1 text-xs font-medium ${STATUS_STYLES[milestone.status]}`}>
-          {milestone.status.replace("_", " ")}
+          {milestone.status === "PAID"
+            ? "Escrow Released"
+            : milestone.status === "IN_PROGRESS"
+            ? "Escrow Funded"
+            : milestone.status.replace("_", " ")}
         </span>
       </div>
 
@@ -220,6 +243,7 @@ function MilestoneRow({ milestone, dealId, isBrand, isCreator }: {
           </div>
         )}
 
+<<<<<<< HEAD
       <div className="mt-2 flex flex-wrap gap-2">
         {escrow === "FUNDED" && (
           <span className="inline-flex items-center rounded-full bg-emerald-500/10 px-2.5 py-1 text-xs font-medium text-emerald-600">
@@ -241,21 +265,56 @@ function MilestoneRow({ milestone, dealId, isBrand, isCreator }: {
             {initializePayment.isPending ? "Preparing bank details…" : "Fund escrow"}
           </Button>
         )}
+=======
+      <div className="mt-2 flex flex-wrap items-center gap-2">
+        {/* BRAND ESCROW ACTIONS */}
+        {isBrand && !isEscrowFunded && !isApprovedOrPaid && (
+          <PayButton
+            dealId={dealId}
+            milestoneId={milestone.id}
+            label={`Fund Escrow (₦${Number(milestone.amount).toLocaleString()})`}
+            icon={<ShieldCheck className="mr-1.5 h-4 w-4" />}
+            className="bg-emerald-600 text-white hover:bg-emerald-700"
+          />
+        )}
+
+>>>>>>> 9c15709e71866d0d287652bd5fa6ab5f84e07faf
         {isBrand && milestone.status === "SUBMITTED" && (
           <>
-            <Button size="sm" onClick={() => approveMilestone.mutate(milestone.id)} disabled={approveMilestone.isPending}>
-              Approve
+            <Button
+              size="sm"
+              onClick={() => approveMilestone.mutate(milestone.id)}
+              disabled={approveMilestone.isPending}
+              className="bg-emerald-600 text-white hover:bg-emerald-700"
+            >
+              <CheckCircle2 className="mr-1.5 h-4 w-4" />
+              {approveMilestone.isPending ? "Releasing funds…" : "Approve & Release Funds"}
             </Button>
             <Button size="sm" variant="destructive" onClick={() => setRejecting((v) => !v)}>
               Reject
             </Button>
           </>
         )}
-        {isBrand && milestone.status === "PENDING" && (
+
+        {isBrand && milestone.status === "PENDING" && !isEscrowFunded && (
           <Button size="sm" variant="ghost" onClick={() => deleteMilestone.mutate(milestone.id)} disabled={deleteMilestone.isPending}>
             <Trash2 className="h-4 w-4" aria-hidden="true" />
             Remove
           </Button>
+        )}
+
+        {/* CREATOR ESCROW ACTIONS */}
+        {isCreator && isEscrowFunded && (milestone.status === "PENDING" || milestone.status === "IN_PROGRESS") && !submitting && (
+          <Button size="sm" variant="secondary" onClick={() => setSubmitting(true)} className="border border-blue-500/20 bg-blue-50 text-blue-700 hover:bg-blue-100">
+            Submit Deliverables
+          </Button>
+        )}
+
+        {isCreator && !isEscrowFunded && milestone.status === "PENDING" && (
+          <p className="flex items-center gap-1.5 text-xs text-amber-600">
+            <Clock className="h-3.5 w-3.5" />
+            Awaiting brand escrow funding before you begin work.
+          </p>
         )}
       </div>
 
@@ -265,6 +324,7 @@ function MilestoneRow({ milestone, dealId, isBrand, isCreator }: {
       {rejecting && (
         <RejectMilestoneForm dealId={dealId} milestoneId={milestone.id} onDone={() => setRejecting(false)} />
       )}
+<<<<<<< HEAD
       {isBrand && awaitingTransfer?.virtualAccount && (
         <FundingPanel payment={awaitingTransfer} sandbox={Boolean(paymentMode?.sandbox)} />
       )}
@@ -273,6 +333,8 @@ function MilestoneRow({ milestone, dealId, isBrand, isCreator }: {
           Couldn&apos;t start funding. The deal must be active and payments enabled; try again shortly.
         </p>
       )}
+=======
+>>>>>>> 9c15709e71866d0d287652bd5fa6ab5f84e07faf
     </div>
   );
 }
@@ -282,7 +344,6 @@ export default function MilestonesPage({ params }: { params: Promise<{ dealId: s
   const user = useAuthStore((s) => s.user);
   const { data: deal } = useDeal(dealId);
   const { data: milestones, isLoading, isError } = useMilestones(dealId);
-  const { data: paymentMode } = usePaymentMode();
   const [showForm, setShowForm] = useState(false);
 
   const isBrand = deal?.brandId === user?.id;
@@ -296,6 +357,7 @@ export default function MilestonesPage({ params }: { params: Promise<{ dealId: s
         Back to deal
       </Link>
 
+<<<<<<< HEAD
       {paymentMode && paymentMode.mode === "sandbox" && (
         <div className="flex items-start gap-2 rounded-lg bg-amber-500/10 p-3 text-sm text-amber-700 dark:text-amber-400">
           <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
@@ -309,6 +371,8 @@ export default function MilestonesPage({ params }: { params: Promise<{ dealId: s
         </div>
       )}
 
+=======
+>>>>>>> 9c15709e71866d0d287652bd5fa6ab5f84e07faf
       <header className="flex flex-wrap items-end justify-between gap-4">
         <div>
           <h1 className="text-2xl font-semibold text-foreground">Milestones</h1>

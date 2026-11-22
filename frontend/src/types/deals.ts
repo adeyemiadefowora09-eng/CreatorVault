@@ -41,7 +41,16 @@ export interface Milestone {
   submissionNote: string | null;
   submissionUrl: string | null;
   submittedAt: string | null;
+<<<<<<< HEAD
   escrowStatus?: "UNFUNDED" | "FUNDED" | "RELEASED" | "REFUNDED";
+=======
+  payment?: {
+    id: string;
+    status: "PENDING" | "PROCESSING" | "COMPLETED" | "FAILED" | "REFUNDED";
+    amount: string | number;
+    paidAt: string | null;
+  } | null;
+>>>>>>> 9c15709e71866d0d287652bd5fa6ab5f84e07faf
 }
 
 export interface Deal {

@@ -3,8 +3,12 @@ import { ApiError } from "../../utils/apiError.js";
 import { CreateMilestoneInput, SubmitMilestoneInput, UpdateMilestoneInput } from "./milestones.validation.js";
 import { applyTrustScoreEvent } from "../trust-score/trustScore.instance.js";
 import { createNotification } from "../notifications/notifications.service.js";
+<<<<<<< HEAD
 import { config } from "../../config/env.js";
 import { releaseMilestoneEscrow } from "../payments/escrow.service.js";
+=======
+import { releaseEscrowPayout } from "../payments/payments.service.js";
+>>>>>>> 9c15709e71866d0d287652bd5fa6ab5f84e07faf
 
 async function verifyDealParty(dealId: string, userId: string) {
   const deal = await prisma.deal.findUnique({ where: { id: dealId } });
@@ -162,6 +166,7 @@ export async function approveMilestone(milestoneId: string, userId: string) {
   if (milestone.deal.brandId !== userId) throw ApiError.forbidden("Only the brand can approve milestones");
   if (milestone.status !== "SUBMITTED") throw ApiError.badRequest("Only SUBMITTED milestones can be approved");
 
+<<<<<<< HEAD
   if (milestone.deal.status === "DISPUTED") {
     throw ApiError.conflict("This deal is under dispute — milestones can't be approved until an admin resolves it");
   }
@@ -175,6 +180,15 @@ export async function approveMilestone(milestoneId: string, userId: string) {
     // Legacy/unfunded: approval is recorded, money is released automatically once the brand funds it.
     updated = await prisma.milestone.update({ where: { id: milestoneId }, data: { status: "APPROVED" } });
   }
+=======
+  // Trigger Escrow Release (Disburses to creator or queues in balance, deducting 100 NGN fee)
+  await releaseEscrowPayout(milestoneId);
+
+  const updated = await prisma.milestone.findUniqueOrThrow({
+    where: { id: milestoneId },
+    include: { payment: true },
+  });
+>>>>>>> 9c15709e71866d0d287652bd5fa6ab5f84e07faf
 
   if (new Date() <= milestone.dueDate) {
     await applyTrustScoreEvent({
@@ -184,6 +198,7 @@ export async function approveMilestone(milestoneId: string, userId: string) {
     });
   }
 
+<<<<<<< HEAD
   await createNotification({
     userId: milestone.deal.creatorId,
     type: "MILESTONE_APPROVED",
@@ -192,6 +207,8 @@ export async function approveMilestone(milestoneId: string, userId: string) {
     metadata: { dealId: milestone.dealId, milestoneId: milestone.id },
   });
 
+=======
+>>>>>>> 9c15709e71866d0d287652bd5fa6ab5f84e07faf
   return updated;
 }
 

@@ -88,7 +88,7 @@ function GeneralProfileForm({
 }
 
 function CreatorProfileForm({ defaults }: { defaults: UpdateCreatorProfileInput }) {
-  const { register, handleSubmit, formState: { isDirty } } = useForm<{
+  const { register, handleSubmit, formState: { isDirty, errors } } = useForm<{
     categories: string;
     portfolioUrl?: string;
     bankAccountName?: string;
@@ -142,6 +142,7 @@ function CreatorProfileForm({ defaults }: { defaults: UpdateCreatorProfileInput 
             <Input id="portfolioUrl" placeholder="https://…" {...register("portfolioUrl")} />
           </div>
 
+<<<<<<< HEAD
           <div className="space-y-1 rounded-lg border border-border p-3">
             <p className="text-sm font-medium text-foreground">Payout bank account</p>
             <p className="text-xs text-muted-foreground">
@@ -151,6 +152,45 @@ function CreatorProfileForm({ defaults }: { defaults: UpdateCreatorProfileInput 
               Bank details are verified with your bank and managed on the{" "}
               <a href="/payments" className="underline underline-offset-2">Payments page</a>.
             </p>
+=======
+          <div className="space-y-3 rounded-lg border border-border p-3">
+            <div>
+              <p className="text-sm font-medium text-foreground">Payout bank details</p>
+              <p className="text-xs text-muted-foreground">
+                {hasBankDetails
+                  ? "Where your milestone earnings are withdrawn to. Update anytime."
+                  : "Required before you can request a payout on the Payments page."}
+              </p>
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="bankAccountName">Account name</Label>
+              <Input id="bankAccountName" placeholder="As it appears on your bank account" {...register("bankAccountName")} />
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <Label htmlFor="bankAccountNumber">Account number</Label>
+                <Input
+                  id="bankAccountNumber"
+                  placeholder="0123456789"
+                  inputMode="numeric"
+                  autoComplete="off"
+                  maxLength={10}
+                  aria-invalid={Boolean(errors.bankAccountNumber)}
+                  {...register("bankAccountNumber", {
+                    // Nigerian bank accounts (NUBAN) are exactly 10 digits. Empty is allowed (details are optional until a payout).
+                    validate: (v) => !v || /^\d{10}$/.test(v.trim()) || "Account number must be exactly 10 digits.",
+                  })}
+                />
+                {errors.bankAccountNumber && (
+                  <p role="alert" className="text-sm text-destructive">{errors.bankAccountNumber.message}</p>
+                )}
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="bankName">Bank name</Label>
+                <Input id="bankName" placeholder="e.g. GTBank" {...register("bankName")} />
+              </div>
+            </div>
+>>>>>>> 9c15709e71866d0d287652bd5fa6ab5f84e07faf
           </div>
 
           <FormStatus
